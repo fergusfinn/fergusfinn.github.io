@@ -44,19 +44,24 @@ const lastModified = dayjs(remarkPluginFrontmatter.lastModified)
 	<main>
 		<article>
 			<div
-				class="app-container flex flex-col lg:flex-row-reverse justify-between gap-8 py-24 relative"
+				class="app-container flex flex-col xl:flex-row gap-4 xl:gap-6 py-24 relative"
 			>
-				<div class="md:w-1/4 relative">
-					<div class="sticky top-0 md:top-28 hidden lg:block">
+				<!-- Left: Table of Contents -->
+				<div class="xl:w-48 flex-shrink-0 relative hidden xl:block">
+					<div class="sticky top-0 xl:top-8">
 						<TableOfContents headings={headings} />
 					</div>
 				</div>
-				<div class="grow w-full md:max-w-[75ch]">
+
+				<!-- Center: Main Content -->
+				<div class="flex-1 min-w-0 max-w-[120ch]">
 					<div>
-						<h1 class="text-4xl sm:text-5xl leading-snug pt-12 font-bold">
+						<h1
+							class="text-4xl sm:text-5xl leading-snug pt-4 xl:pt-8 font-bold"
+						>
 							{title}
 						</h1>
-						<div class="text-lg flex items-center gap-4 flex-wrap py-8">
+						<div class="text-lg flex items-center gap-4 flex-wrap py-4">
 							<!-- Publish date -->
 							<span>
 								<Icon
@@ -88,26 +93,9 @@ const lastModified = dayjs(remarkPluginFrontmatter.lastModified)
 								{remarkPluginFrontmatter.minutesRead}
 							</span>
 						</div>
-
-						{
-							blogImages[coverImagePath] && (
-								<>
-									<Image
-										src={blogImages[coverImagePath]()}
-										alt={title}
-										class="rounded-lg"
-									/>
-									{coverImageCredit && (
-										<p class="mt-2 mb-8 opacity-80 italic text-sm">
-											Image Credit: {coverImageCredit}
-										</p>
-									)}
-								</>
-							)
-						}
 					</div>
 					<div
-						class="prose prose-neutral prose-lg md:prose-xl dark:prose-invert prose-img:rounded-xl prose-figure:text-center prose-img:mx-auto"
+						class="prose prose-neutral prose-xl md:prose-xl dark:prose-invert prose-img:rounded-xl prose-figure:text-center prose-img:mx-auto"
 					>
 						<slot />
 					</div>
@@ -127,7 +115,40 @@ const lastModified = dayjs(remarkPluginFrontmatter.lastModified)
 						</p>
 					</div>
 				</div>
+
+				<!-- Right: Space for sidenotes -->
+				<div class="xl:w-64 flex-shrink-0 hidden xl:block"></div>
 			</div>
 		</article>
 	</main>
+
+	<script>
+		// Tufte-style sidenotes functionality
+		function initSidenotes() {
+			// Handle component-based sidenotes with auto-numbering
+			const sidenoteWrappers = document.querySelectorAll('.sidenote-wrapper')
+			sidenoteWrappers.forEach((wrapper, index) => {
+				const sidenoteId = wrapper.getAttribute('data-sidenote-id')
+				const label = wrapper.querySelector('.sidenote-number')
+				const sidenoteNumberCopy = wrapper.querySelector(
+					'.sidenote-number-copy'
+				)
+
+				if (label && sidenoteNumberCopy) {
+					const number = index + 1
+					label.textContent = number.toString()
+					sidenoteNumberCopy.textContent = `${number}.`
+					label.setAttribute('data-sidenote-id', sidenoteId)
+					sidenoteNumberCopy.setAttribute('data-sidenote-id', sidenoteId)
+				}
+			})
+		}
+
+		// Initialize when DOM is ready
+		if (document.readyState === 'loading') {
+			document.addEventListener('DOMContentLoaded', initSidenotes)
+		} else {
+			initSidenotes()
+		}
+	</script>
 </BaseLayout>

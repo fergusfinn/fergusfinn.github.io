@@ -1,0 +1,25 @@
+---
+export interface Props {
+	id?: string
+}
+
+const { id } = Astro.props
+
+// Generate a unique ID if not provided
+const sidenoteId = id || `sidenote-${Math.random().toString(36).substr(2, 9)}`
+---
+
+<span class="sidenote-wrapper" data-sidenote-id={sidenoteId}>
+	<input type="checkbox" class="margin-toggle" id={sidenoteId} />
+	<label class="sidenote-number" for={sidenoteId}></label>
+	<span class="sidenote">
+		<span class="sidenote-number-copy text-primary dark:text-primary-dark"></span>
+		<slot />
+	</span>
+</span>
+
+<style>
+	.sidenote-wrapper {
+		display: contents;
+	}
+</style>

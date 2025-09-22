@@ -1,0 +1,87 @@
+---
+title: 'Paged attention'
+description: |
+  A discussion of paged attention
+pubDate: 'Aug 28 2025'
+---
+
+### The KV cache
+
+Autoregressive LLMs work on the same sequence many steps in a row. Doing so
+requires recomputing the same Key and Value tensors in the attention mechanism
+many times. To speed it up, we can storing this information in VRAM to save
+recomputing it. The size of this stored "KV cache" ends up being the bottleneck
+for how many sequences we can effectively work on at a time. At boot time, the
+inference engine allocates a chunk of VRAM for KV cache entries for its
+'working batch'.
+
+The first inference systems would have this working batch be allocated as a
+rectangular array.
+
+```txt
+               Sequence Length (Tokens) →
+       0    8    16   24   32   40   48   56   64
+     ┌────┬────┬────┬────┬────┬────┬────┬────┬────┐
+  0  │████│████│████│████│████│████│████│████│░░░░│ ← (60)
+  1  │████│████│████│████│████│░░░░│░░░░│░░░░│░░░░│ ← (40)
+  2  │████│████│████│████│████│████│░░░░│░░░░│░░░░│ ← (48)
+  3  │████│████│████│░░░░│░░░░│░░░░│░░░░│░░░░│░░░░│ ← (24)
+  4  │████│████│░░░░│░░░░│░░░░│░░░░│░░░░│░░░░│░░░░│ ← (16)
+  5  │████│░░░░│░░░░│░░░░│░░░░│░░░░│░░░░│░░░░│░░░░│ ← (8)
+     └────┴────┴────┴────┴────┴────┴────┴────┴────┘
+     ↑                                           ↑
+  Start                                    Max Length
+```
+
+The scheduling problem in this case is simple. When a request comes in, we ask,
+'is there a free slot'? If there is, we put the request in. If there isn't, we
+wait. As time goes on, the amount of space used by each sequence grows. This is
+never a problem, because our rectangle has exactly enough space for the largest
+possible size the sequence could grow to.
+
+There's some pretty obvious problems with this approach though. All the gray
+squares are just wasted memory. VRAM is expensive, we can't go around
+allocating it and not using it.
+
+Instead, the people who came up with vLLM also came up with "Paged
+Attention". With paged attention, instead of allocating all the space up
+front in the shape in a nice neat rectangle, we map out the memory each
+sequence requires as it grows. All our KV memory comes from a block we call the
+'page table'. It's of some shape much narrower than the rectangular KV cache
+above.
+
+```txt
+   Index Table                      Page Table
+══════════════════════════    ═══════════════════════════════════════
+
+     0   1                     page │ usage        │ status
+   ┌───┬───┬───┬───┐                ├──────────────┤
+ 0 │ 0 │ 1 │ 2 │ 3 │ (60)         0 │██████████████│ FULL
+ 1 │ 4 │ 5 │ x │ x │ (32)         1 │██████████████│ FULL
+ 2 │ 6 │ 7 │ 8 │ x │ (40)         2 │██████████████│ FULL
+ 3 │ 9 │ x │ x │ x │ (12)         3 │██████████░░░░│ PARTIAL(12/16)
+   └───┴───┴───┴───┘              4 │██████████████│ FULL
+                                  5 │██████████████│ FULL
+4 sequences, page_size=16         6 │██████████████│ FULL
+                                  7 │██████████████│ FULL
+   x indicates padding            8 │████████░░░░░░│ PARTIAL(8/16)
+                                  9 │██████████░░░░│ PARTIAL(12/16)
+                                 10 │░░░░░░░░░░░░░░│ FREE
+```
+
+Instead of giving each sequence a whole row, we give each sequence several
+rows, to write its KV cache into. The mapping from sequences to rows, and the
+ordering of rows, is maintained in a structure we call an 'index table' here.
+It's a list of the indexes of the pages assigned to each sequence (wrapped up
+into a 2d array, because arrays are nice when you're sending stuff to be
+processed on GPU.)
+
+As a sequence grows past a page boundary, it will need to be allocated a new
+page to write into. Also, when new sequences join the working batch, they'll
+need to be allocated pages for their prompts up front.
+
+This system works great - there are way fewer gray blocks! Much more of our
+memory gets used for useful things. But scheduling becomes hard. We started
+with a system where every request would just safely complete without us
+managing it. But now we've got a complicated dynamical system, where growing
+sequences and incoming sequences must fight for the same pages.

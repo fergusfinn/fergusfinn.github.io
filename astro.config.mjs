@@ -8,6 +8,8 @@ import rehypeFigureTitle from 'rehype-figure-title'
 import { rehypeAccessibleEmojis } from 'rehype-accessible-emojis'
 import { remarkReadingTime } from './src/plugins/remark-reading-time.mjs'
 import { remarkModifiedTime } from './src/plugins/remark-modified-time.mjs'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
 
 // https://astro.build/config
 export default defineConfig({
@@ -26,7 +28,7 @@ export default defineConfig({
     plugins: [tailwindcss()],
   },
   markdown: {
-    remarkPlugins: [remarkReadingTime, remarkModifiedTime],
-    rehypePlugins: [rehypeFigureTitle, rehypeAccessibleEmojis],
+    remarkPlugins: [remarkReadingTime, remarkModifiedTime, remarkMath],
+    rehypePlugins: [rehypeFigureTitle, rehypeAccessibleEmojis, rehypeKatex],
   },
 })

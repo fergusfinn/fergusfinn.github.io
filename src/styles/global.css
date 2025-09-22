@@ -4,8 +4,9 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme {
-	--font-sans: 'Inter Variable', sans-serif;
-	--font-mono: 'JetBrains Mono Variable', monospace;
+	--font-sans: 'Source Sans 3', sans-serif;
+	--font-serif: 'Crimson Pro', serif;
+	--font-mono: 'JetBrains Mono', monospace;
 
 	--color-foreground: #0c0c0c;
 	--color-foreground-dark: #fafafa;
@@ -15,13 +16,13 @@
 	--color-primary-dark: #9bd4e4;
 }
 
-html {
-	scroll-padding-top: 6.5rem;
-	scroll-behavior: smooth;
-}
-
+/* html { */
+/* 	scroll-padding-top: 6.5rem; */
+/* 	scroll-behavior: smooth; */
+/* } */
+/**/
 .app-container {
-	@apply container mx-auto px-6 sm:px-12 2xl:px-16;
+	@apply container mx-auto px-6 sm:px-12 lg:px-8 xl:px-12 2xl:px-16;
 }
 
 #mobile-menu.mobile-nav-open {
@@ -45,6 +46,125 @@ html {
 }
 
 /* Post content */
+.prose {
+	font-family: var(--font-serif);
+	line-height: 1.5;
+	font-feature-settings: "kern" 1, "liga" 1, "clig" 1, "calt" 1;
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
+	font-family: var(--font-sans);
+	line-height: 1.2;
+	margin-top: 1.5rem;
+	margin-bottom: 0.75rem;
+}
+
 .prose iframe {
 	@apply my-16 mx-auto w-11/12 aspect-video rounded-xl;
 }
+
+
+/* Tighter line spacing for code blocks (ASCII diagrams) */
+.prose-lg pre,
+.prose-xl pre {
+	line-height: 1.1;
+}
+
+/* Math text sizing - KaTeX */
+.prose .katex {
+	font-size: 1em !important;
+}
+
+.prose .katex-display {
+	font-size: 1em !important;
+}
+
+.prose .katex .katex-html {
+	font-size: 1em !important;
+}
+
+/* Tufte-style sidenotes - adapted from tufte-css */
+.margin-toggle {
+	display: none;
+}
+
+.sidenote-number {
+	@apply text-primary dark:text-primary-dark;
+	font-size: 0.875rem;
+	line-height: 1;
+	vertical-align: baseline;
+	transform: translateY(-0.3em);
+	display: inline-block;
+	max-height: 2rem;
+	font-weight: 400;
+	opacity: 1;
+	transition: opacity 0.2s ease, transform 0.2s ease;
+	margin: 0;
+	padding: 0;
+	letter-spacing: 0;
+}
+
+.sidenote-number:hover {
+	opacity: 1;
+	transform: translateY(-0.4em);
+}
+
+
+.sidenote {
+	float: right;
+	clear: right;
+	margin-right: -32%; /* Fixed margin for two-column layout */
+	width: 30%;
+	margin-top: 0.3rem;
+	margin-bottom: 0;
+	font-size: 0.875rem;
+	line-height: 1.3;
+	vertical-align: baseline;
+	position: relative;
+	font-family: var(--font-sans);
+}
+
+/* Three-column layout: position in dedicated right column */
+@media (min-width: 1280px) {
+	.sidenote {
+		margin-right: -17.5rem; /* Push into the right column space (xl:w-64 = 16rem + gap) */
+		width: 15rem; /* Fit within the wider right column */
+	}
+}
+
+/* Below xl: hide sidenotes and show toggle behavior */
+@media (max-width: 1279px) {
+	.sidenote-number {
+		@apply cursor-pointer;
+	}
+
+	.sidenote {
+		display: none;
+	}
+
+	.margin-toggle:checked + .sidenote-number + .sidenote {
+		display: block;
+		float: left;
+		left: 1rem;
+		clear: both;
+		width: 95%;
+		margin: 1rem 2.5%;
+		vertical-align: baseline;
+		position: relative;
+		padding: 1rem;
+		background: var(--color-background);
+		border-left: 3px solid var(--color-primary);
+		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+	}
+
+	.dark .margin-toggle:checked + .sidenote-number + .sidenote {
+		background: var(--color-background-dark);
+		border-left-color: var(--color-primary-dark);
+	}
+}
+
