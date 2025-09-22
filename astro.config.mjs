@@ -13,7 +13,7 @@ import rehypeKatex from 'rehype-katex'
 
 // https://astro.build/config
 export default defineConfig({
-  site: 'https://yashjawale.github.io',
+  site: 'https://fergusfinn.github.io',
   integrations: [
     mdx(),
     sitemap(),
