@@ -3,7 +3,6 @@ title: 'Scheduling in inference engines'
 description: |
   A look into how inference engines choose which requests to process
 pubDate: 'Aug 28 2025'
-coverImageCredit: 'Sindy Süßengut, Unsplash'
 ---
 
 import Sidenote from '../../components/Sidenote.astro'
@@ -36,7 +35,7 @@ Maximizing the number of actively processing requests is a good way to improve
 the performance of your inference system<Sidenote>Probably. We can saturate the compute capacity of the accelerator without using all of the GPU memory, so adding more sequences to the batch doesn't necessarily improve the throughput. But it does increase some other useful properties.</Sidenote>.
 
 This is a scheduling problem. We're going to have a look at how its
-done, and muse about how to improve it.
+done, and think about how to improve it.
 
 ## Defining the problem
 
@@ -68,23 +67,24 @@ working on it. If there isn't, we wait. As time goes on, the amount of space
 used by each sequence grows. This is never a problem, because our rectangle has
 exactly enough space for the largest possible size the sequence could grow to.
 
-There's some pretty obvious problems with this approach though. All the gray
+There's some pretty obvious problems with this approach. All the gray
 squares are just wasted memory. VRAM is expensive, we can't go around
 allocating it and not using it.
 
-The solution we've settled on is [paged attention](/blog/paged-attention). But
-now we've dealt with the fragmentation problem, we've made it possible to fit
-many more sequences in memory. Each request that we want to process needs to be
-prefilled - which requires us to allocate memory for each incoming token. Over
-time, each sequence in the batch will grow - by one token per iteration<Sidenote>More, if we do speculative decoding.</Sidenote>.
+The solution that most systems have settled on is [paged
+attention](/blog/paged-attention). But now we've dealt with the fragmentation
+problem, we've made it possible to fit many more sequences in memory. Each
+request that we want to process needs to be prefilled - which requires us to
+allocate memory for each incoming token. Over time, each sequence in the batch
+will grow - by one token per iteration<Sidenote>More, if we do speculative
+decoding.</Sidenote>.
 
 We have a hard constraint on the total amount of memory we can use. So we need
 to make two different decisions:
 
 **Which requests are we going to bring into the batch**. The obvious thing to
 do is to just take requests as they come. But (as we'll see later), this
-doesn't necessarily give you maximal performance. It also doesn't take into
-account user preference.
+doesn't necessarily give you maximal performance.
 
 **What should we do when we run out of space for existing sequences to continue
 growing.** One of our sequences will need to be 'preempted'. Which one? When
@@ -435,9 +435,12 @@ sequence at least 1 token to grow into</Sidenote>. At time $1$, the KV cache
 will be full ($16$ tokens: $8$ prefill tokens, $8$ decode tokens), so we need
 to evict some sequences. Since we need $1$ token of space for each request that
 proceeds to the next iteration, we have to preempt the last $4$ sequences. At
-time $2$, the same thing will happen again. So we preempt the last $3$
+time $2$, the same thing will happen again, so we cut our batch size in half
+again, and again, .... Once the first sequence completes, we can start the
+process again with the second sequence in the first slot. Only the sequence in
+the first slot ever completes.
 
-We get $9$ preemptions for each successful completion. Is this
+Each completion of length $N$ triggers $O(N)$ preemptions. Is this
 optimal?<Sidenote>Pessimal?</Sidenote>
 
 ## Outlook
