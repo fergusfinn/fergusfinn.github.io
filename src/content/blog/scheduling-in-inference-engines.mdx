@@ -344,13 +344,13 @@ requests:
 
 The algorithm has a few interesting properties:
 
-1. It's completely first come first served<Sidenote>There are a few edge cases: 1. For encoder-decoder (whisper) models, there's some logic that I've elided that will let requests w/ shorter encoder prompts schedule before requests w/ longer encoder prompts, if the higher priority requests won't fit into the encoder batch. 2. For models that have a prefix cache hit in a remote KV cache store, the scheduling algorithm will skip scheduling those requests until the KV cache transfer completes. 3. Same applies for models whose structured output FSM is being constructed.</Sidenote>. If a sequence gets preempted,
+1. It's completely first come first served<Sidenote>There are a few edge cases: 1. For encoder-decoder (whisper) models, there's some logic that I've elided that will let requests with shorter encoder prompts schedule before requests with longer encoder prompts, if the higher priority requests won't fit into the encoder batch. 2. For models that have a prefix cache hit in a remote KV cache store, the scheduling algorithm will skip scheduling those requests until the KV cache transfer completes. 3. Same applies for models whose structured output FSM is being constructed.</Sidenote>. If a sequence gets preempted,
    it goes straight to the head of the queue. Even if a preempted sequence is
    so large that a smaller queued sequence could fit in its place, we don't take
    the chance to do so, since that would break the fairness guarantee.
 
 2. It doesn't take into account 'temporal cache locality'. Prefix caching is a
-   big deal for prefill inference. Scheduling requests w/ similar prefix caches
+   big deal for prefill inference. Scheduling requests with similar prefix caches
    next to each other increases the chance that the prefix cache that they share
    will remain in VRAM for all the requests. But doing so would break the FCFS guarantee.
 
@@ -434,11 +434,25 @@ At time $0$, $8$ sequences will join the batch<Sidenote>We need to give each
 sequence at least 1 token to grow into</Sidenote>. At time $1$, the KV cache
 will be full ($16$ tokens: $8$ prefill tokens, $8$ decode tokens), so we need
 to evict some sequences. Since we need $1$ token of space for each request that
-proceeds to the next iteration, we have to preempt the last $4$ sequences. At
-time $2$, the same thing will happen again, so we cut our batch size in half
+proceeds to the next iteration, we have to preempt the last $3$ sequences. At
+time $2$, the same thing will happen again, so we cut down our batch size
 again, and again, .... Once the first sequence completes, we can start the
 process again with the second sequence in the first slot. Only the sequence in
 the first slot ever completes.
+
+```
+
+  0 ░ → 0 ░▓ → 0 ░▓▓ → 0 ░▓▓▓ → ... 0 ░▓▓▓ → ... →  0 ░▓▓▓▓▓▓▓▓▓▓
+  1 ░   1 ░▓   1 ░▓▓   1 ░▓▓▓       1 ░▓▓▓            x
+  2 ░   2 ░▓   2 ░▓▓   2 ░▓▓▓         x
+  3 ░   3 ░▓   3 ░▓▓     x
+  4 ░   4 ░▓     x
+  5 ░   5 ░▓     x
+  6 ░   6 ░▓     x
+  7 ░   7 ░▓     x
+
+  Legend: ░ = Prefill, ▓ = Decode x = Preempted
+```
 
 Each completion of length $N$ triggers $O(N)$ preemptions. Is this
 optimal?<Sidenote>Pessimal?</Sidenote>
