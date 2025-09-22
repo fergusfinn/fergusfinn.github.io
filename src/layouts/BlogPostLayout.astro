@@ -122,6 +122,7 @@ const lastModified = dayjs(remarkPluginFrontmatter.lastModified)
 			sidenoteWrappers.forEach((wrapper, index) => {
 				const sidenoteId = wrapper.getAttribute('data-sidenote-id')
 				const label = wrapper.querySelector('.sidenote-number')
+				const sidenote = wrapper.querySelector('.sidenote')
 				const sidenoteNumberCopy = wrapper.querySelector(
 					'.sidenote-number-copy'
 				)
@@ -132,6 +133,24 @@ const lastModified = dayjs(remarkPluginFrontmatter.lastModified)
 					sidenoteNumberCopy.textContent = `${number}.`
 					label.setAttribute('data-sidenote-id', sidenoteId)
 					sidenoteNumberCopy.setAttribute('data-sidenote-id', sidenoteId)
+				}
+
+				// Add hover interaction between sidenote and its number
+				if (label && sidenote) {
+					sidenote.addEventListener('mouseenter', () => {
+						label.classList.add('hover-active')
+					})
+					sidenote.addEventListener('mouseleave', () => {
+						label.classList.remove('hover-active')
+					})
+
+					// Also add the reverse interaction
+					label.addEventListener('mouseenter', () => {
+						sidenote.classList.add('hover-active')
+					})
+					label.addEventListener('mouseleave', () => {
+						sidenote.classList.remove('hover-active')
+					})
 				}
 			})
 		}

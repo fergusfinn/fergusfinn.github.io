@@ -1,0 +1,96 @@
+<svg viewBox="0 0 900 500" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      text { font-family: 'Berkeley Mono', 'Courier New', monospace; font-size: 16px; fill: #000; }
+      .box { stroke: #000; stroke-width: 2; fill: none; }
+      .thick { stroke-width: 3; }
+      .dashed { stroke-dasharray: 8,4; }
+      path, line { fill: none; }
+      .red { stroke: #ff0000; }
+    </style>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M 0 0 L 8 4 L 0 8" stroke="#000" stroke-width="1.5" fill="none"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M 0 0 L 8 4 L 0 8" stroke="#ff0000" stroke-width="1.5" fill="none"/>
+    </marker>
+  </defs>
+
+  <!-- Main outer box using box drawing style paths -->
+  <path class="box thick" d="M 20 20 L 880 20 M 20 20 L 20 480 M 880 20 L 880 480 M 20 480 L 880 480"/>
+
+  <!-- Center divider -->
+  <line class="box thick" x1="450" y1="20" x2="450" y2="480" />
+
+  <!-- Horizontal divider under titles -->
+  <line class="box" x1="20" y1="70" x2="880" y2="70" stroke-dasharray="4,2" opacity="0.5"/>
+
+  <!-- Title text -->
+  <text x="40" y="50">Prefill ───► High Parallelism</text>
+  <text x="470" y="50">Decode ───► Low Parallelism</text>
+
+  <!-- Left side (Prefill) -->
+  <!-- Model box with sharp corners -->
+  <path class="box" d="M 100 150 L 350 150 L 350 280 L 100 280 Z"/>
+  <!-- Top border -->
+  <line class="box" x1="100" y1="155" x2="350" y2="155"/>
+  <!-- Bottom border -->
+  <line class="box" x1="100" y1="275" x2="350" y2="275"/>
+
+  <text x="180" y="220">Llama 70B</text>
+
+  <!-- Input arrows for prefill -->
+  <line class="box" x1="120" y1="380" x2="120" y2="280" marker-end="url(#arrow)"/>
+  <line class="box" x1="150" y1="380" x2="150" y2="280" marker-end="url(#arrow)"/>
+  <line class="box" x1="180" y1="380" x2="180" y2="280" marker-end="url(#arrow)"/>
+  <line class="box" x1="210" y1="380" x2="210" y2="280" marker-end="url(#arrow)"/>
+  <line class="box" x1="240" y1="380" x2="240" y2="280" marker-end="url(#arrow)"/>
+  <line class="box" x1="270" y1="380" x2="270" y2="280" marker-end="url(#arrow)"/>
+  <line class="box" x1="300" y1="380" x2="300" y2="280" marker-end="url(#arrow)"/>
+  <line class="box" x1="330" y1="380" x2="330" y2="280" marker-end="url(#arrow)"/>
+
+  <text x="60" y="420" style="font-size: 14px">You are an AI agent, and your task is to...</text>
+
+  <!-- Right side (Decode) -->
+  <!-- Model box -->
+  <path class="box" d="M 530 150 L 780 150 L 780 280 L 530 280 Z"/>
+  <line class="box" x1="530" y1="155" x2="780" y2="155"/>
+  <line class="box" x1="530" y1="275" x2="780" y2="275"/>
+
+  <text x="610" y="220">Llama 70B</text>
+
+  <!-- Input arrows for decode -->
+  <line class="box" x1="570" y1="380" x2="570" y2="280" marker-end="url(#arrow)"/>
+  <line class="box" x1="620" y1="380" x2="620" y2="280" marker-end="url(#arrow)"/>
+  <line class="box" x1="680" y1="380" x2="680" y2="280" marker-end="url(#arrow)"/>
+  <line class="box" x1="740" y1="380" x2="740" y2="280" marker-end="url(#arrow)"/>
+
+  <!-- Output arrows -->
+  <line class="box" x1="570" y1="150" x2="570" y2="100" marker-end="url(#arrow)"/>
+  <line class="box" x1="620" y1="150" x2="620" y2="100" marker-end="url(#arrow)"/>
+  <line class="box" x1="680" y1="150" x2="680" y2="100" marker-end="url(#arrow)"/>
+  <line class="box" x1="740" y1="150" x2="740" y2="100" marker-end="url(#arrow)"/>
+
+  <!-- Feedback paths using box-drawing style (sharp corners only) -->
+  <path class="box red" stroke-width="2" d="M 570 100 L 570 90 L 550 90 L 550 390 L 590 390 L 590 380" marker-end="url(#arrow-red)"/>
+  <path class="box red" stroke-width="2" d="M 620 100 L 620 80 L 510 80 L 510 400 L 640 400 L 640 380" marker-end="url(#arrow-red)"/>
+  <path class="box red" stroke-width="2" d="M 680 100 L 680 70 L 490 70 L 490 410 L 700 410 L 700 380" marker-end="url(#arrow-red)"/>
+  <path class="box red" stroke-width="2" d="M 740 100 L 740 60 L 470 60 L 470 420 L 760 420 L 760 380" marker-end="url(#arrow-red)"/>
+
+  <!-- Text labels -->
+  <text x="560" y="410" style="font-size: 14px">As</text>
+  <text x="610" y="410" style="font-size: 14px">a</text>
+  <text x="650" y="410" style="font-size: 14px">language</text>
+  <text x="730" y="410" style="font-size: 14px">model</text>
+
+  <text x="610" y="95" style="font-size: 14px">a</text>
+  <text x="650" y="95" style="font-size: 14px">language</text>
+  <text x="730" y="95" style="font-size: 14px">model</text>
+  <text x="790" y="95" style="font-size: 14px">...</text>
+
+  <!-- Corner decorations mimicking box drawing -->
+  <path class="box thick" d="M 20 20 L 30 20 M 20 20 L 20 30"/>
+  <path class="box thick" d="M 870 20 L 880 20 M 880 20 L 880 30"/>
+  <path class="box thick" d="M 20 470 L 20 480 M 20 480 L 30 480"/>
+  <path class="box thick" d="M 870 480 L 880 480 M 880 470 L 880 480"/>
+</svg>

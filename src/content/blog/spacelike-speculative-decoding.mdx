@@ -1,0 +1,426 @@
+---
+title: 'Using caching for fast speculative decoding'
+description: |
+  Speculative decoding speeds up LLM inference, but using another model works poorly.
+pubDate: 'Sep 22 2025'
+---
+
+import Sidenote from '../../components/Sidenote.astro'
+
+This article is reproduced from the Doubleword AI
+[blog](https://www.doubleword.ai/resources/the-next-leap-in-speculative-decoding-inside-titanmls-takeoff-engine).
+It concerns a feature we built to speed up LLM inference in our "Takeoff"
+inference engine.
+
+Speculative decoding is a powerful technique for speeding up large language
+model inference. In this article I'll talk a bit about how speculative decoding
+works, how the standard model of speculative decoding is 'doing it wrong', and
+how we implemented speculative decoding in our Takeoff engine.
+
+## What is speculative decoding
+
+GPUs are very good at computing many similar things in parallel. Happily for
+those of us who run large scale AI models, LLM inference has this quality: it
+consists (for the most part) of very parallelisable matrix multiplications. But
+the power of our GPUs has long since outstripped the compute our models need to
+deal with just one user at a time. And GPUs are expensive - we want to get as
+much use as we possibly can out of them. To push our GPUs to their limit, one
+thing we can do is run our LLMs with many user inputs at once.
+
+But what if we don't have many users? What if instead of maximising the
+throughput of our inference system , what our application needs is to deliver
+results to each of a smaller number of users, very quickly?. This was the
+domain for which _speculative decoding_ was introduced.
+
+## Part I: Speculative decoding, and why we're doing it wrong
+
+### How speculative decoding works
+
+LLMs text generation runs in two phases: first the model processes the prompt
+(termed the 'prefill' phase), and then it generates new tokens one by one, each
+conditioned on each of its previously generated tokens (the 'decode' phase).
+The prefill phase is parallelisable: the user supplies many tokens: all of
+which the model can process at the same time<Sidenote> This was one of the qualities most celebrated about the transformer
+architecture in the original transformers paper: that it had a mode in which
+many tokens could be ingested in parallel. The transformer's predecessor (the
+recurrent neural network, or RNN) did not work this way, and so it was unable
+to effectively utilize all the parallel compute we have nowadays. The pendulum
+has swung (very slightly) back the other way with new, linear state-space
+models that behave like RNNs but have a 'parallel mode' in which they can also
+process tokens in parallel. </Sidenote>.
+
+The decode phase is not: for each user, the model can only 'see' one new
+token at a time. All our GPU power is held up waiting for new data from
+previous iterations, and not enough comes in at each step to keep our GPUs
+working as hard as they can.
+
+```txt
+  PREFILL: All tokens hit the LLM at once
+  ════════════════════════════════════════════════
+  T₁ ──┐
+  T₂ ──┤
+  T₃ ──┤    ┌─────┐
+  T₄ ──┼───→│ LLM │───→ Output
+  T₅ ──┤    └─────┘
+  T₆ ──┤
+  T₇ ──┘
+  ════════════════════════════════════════════════
+
+  DECODE: Each token waits for the previous one
+  ════════════════════════════════════════════════
+        ┌─────┐
+   T₁ → │ LLM │ ─╮
+        └─────┘  │
+                 ↓   ┌─────┐
+   T₁         + T₂ → │ LLM │ ─╮
+                     └─────┘  │
+                              ↓   ┌─────┐
+   T₁         + T₂         + T₃ → │ LLM │─╮
+                                  └─────┘ │
+                                          ↓
+                                         ...
+  ════════════════════════════════════════════════
+```
+
+Speculative decoding unblocks the decoding pipe: the idea is that instead of
+generating one new token at a time (slow, serial), we should instead check many
+candidate tokens at once (fast, parallelised). If the tokens the LLM checks are
+the ones the LLM would have generated anyway, then we're happy - we accept the
+candidate tokens, and we send them on to the user. If they're not, then we
+reject them. In the process of checking the candidates, we also tell the LLM to
+figure out what it would sample if all the candidates are wrong, so either way
+we get a prediction for the next token, and we can proceed to the next round.
+
+```txt
+  SPECULATIVE DECODE: Multiple draft tokens verified at once
+  ════════════════════════════════════════════════
+        ┌─────────┐
+        │ Draft   │ (D₁, D₂, D₃)
+        └─────────┘
+             ↓         ┌─────┐
+   T₁ + D₁ + D₂ + D₃ → │ LLM │ → T₁  D₁✓  D₂✓ D₃✗
+                       └─────┘          ↓      ┌─────┐
+                                 T₁+ D₁ + D₂ → │ LLM │ → ...
+                                               └─────┘
+```
+
+But its not enough to know that if we had good guesses we could check them in
+parallel: we need candidates. If we knew what tokens the LLM was going to
+generate before we started, we wouldn't have needed the LLM in the first place.
+The important insight when we're looking for candidates is that not all tokens
+generated by an LLM are created equal. When we analyse the text that comes out
+of an LLM, we see repeated patterns all the time - everyone has heard the 'As a
+large language model' preamble before, but also consider how often LLMs choose
+to 'delve' into new topics, or 'take a nuanced approach' <Sidenote>Some interesting papers on the topic of LLM outputs and their predictability: https://aclanthology.org/2024.emnlp-main.800.pdf, https://arxiv.org/pdf/2410.11672 </Sidenote>
+.
+
+Even patterns more complex than
+these - that aren't simple regurgitations of training data - are predictable
+from context: given the same prompt, the model will probably generate the same
+response.
+
+So, instead of the LLM having to come up with these same repeated ideas from
+scratch, the trick of speculative decoding is to encode these simpler
+structures into a simpler language model. We usually call this smaller model a
+'draft' model <Sidenote>Throughout this article - a 'language model' doesn't necessarily mean a 'large
+language model' - in modern parlance, a large transformer based model like
+Llama, ChatGPT, etc. We use it to mean any model capable of processing (& in
+this case also generating) language. </Sidenote>.
+
+Its job is to come up with good predictions (drafts) for the large model to
+verify.
+
+The 'draft model' doesn't replicate the outputs of the 'teacher model' exactly
+(if it could, we would have just used it instead). But, if it's any good at
+all, the teacher model will accept its outputs some fraction of the time. Every
+time it does, we get many tokens for the price of one. Every time it doesn't,
+the algorithm is set up so that we still get one new token from the large
+model. As a result, if we get any acceptances of our drafts (and we have enough
+computing power that all the tokens from the draft can be checked in parallel),
+then the combination of the smaller and the larger model will run faster than
+the larger model by itself.
+
+### How to generate good drafts for speculative decoding
+
+There are many different ways that people have tried to use this insight to
+speed up LLMs. The original papers considered using another LLM as the 'draft'
+model. This is sufficient to prove the value of the idea, but in real life
+serving systems this approach is lacking.
+
+Running another model on the GPU is a messy way to deal with the high cost of
+inference. The two can be carefully orchestrated, so that one doesn't block the
+other, but to get acceptable latency from both models, both will have to stay
+in GPU memory at once. Large models (broadly) are good models, and if our draft
+model is taking up GPU space then our large model has to be smaller to make
+room.
+
+Further, for LLMs as they are designed today,
+tokenization<Sidenote>Tokenization is frustratingly often the reason why LLMs
+don't behave the way that we want them to.</Sidenote> is a problem when
+translating the output of one model to another: each model 'sees' text
+differently. If we want to find another model that can produce useful drafts
+for our 'teacher', we need a smaller model that outputs similar results, and
+has the same tokenizer. There are such models - often when training a large
+model, a team will train a series of models, from small to large, and the
+smaller models can be used as draft models. But for an arbitrary input model,
+or when we have tight serving requirements, these models probably won't do. For
+example if you want an even faster version of Llama 3.2-1B, there are no
+smaller versions of the model released by Meta to use as a draft model.
+
+There's a more fundamental reason why using another off the shelf language
+model won't work as well as we want it to. Different language models the same
+output distribution (i.e. human language), but they can do it effectively in
+many different ways. Think about the near-infinite variety of ways in which
+humans can effectively communicate with one another, even in the same language.
+
+The insight here is that we're modelling the problem of speculative decoding
+wrong. Instead of finding a language model that understands the distribution of
+human language in the same way as the original model<Sidenote>A model trained
+on the same data, for example.</Sidenote>, what we really need is a language
+model that directly models the distribution of outputs of the original language
+model. If our draft model thinks that 'delve' is hackneyed and overused, but
+our teacher model disagrees, then our draft model might well be a better
+writer, but it's a bad draft model. Importantly: we only care about the outputs
+of the original language model on typical inputs - inputs we might see at
+inference time.
+
+In our inference engine we try to take these insights to heart. The solution
+we've come to is to build our drafting system from the inputs and the outputs
+that the LLM processes at runtime. That way, our draft model can learn from the
+distribution that it actually needs to model, rather than just being modelling
+language as a whole. We use the draft model to prompt the LLM, and we use the
+outputs of the LLM to improve the draft model. Over time, the entire system
+gets faster.
+
+<Sidenote unnumbered>
+ A subset of available methods for getting draft tokens that have been tried in
+ the literature. SSD is designed to minimize the tradeoffs made in each method
+ between cost of generating draft tokens, and the generalizability of the
+ method to different model types and topics.
+</Sidenote>
+
+| Method    | Cost of draft tokens | Generalizability |
+| --------- | -------------------- | ---------------- |
+| SSD       | Extremely low        | High             |
+| Other LLM | High                 | Medium           |
+| REST      | Low                  | Low              |
+
+## Part II: Diving deeper: how the Takeoff inference engine builds its draft model
+
+Takeoff's draft algorithm is called 'Spacelike Speculative Decoding'<Sidenote>Because the tokens travel forwards in time, obviously</Sidenote>, or SSD.
+In the SSD algorithm, we speculatively decode off of all of the models previous
+outputs (over the lifetime of the inference system).
+
+Training a drafting system at inference time is a complex endeavour. We want
+our system to be:
+
+- **Deterministic and reliable**: Predictable systems are easy to maintain.
+  Training LLMs is complex & non-deterministic. Training one at inference time
+  might fail in unexpected ways.
+- **Fast**: The draft system has to run in series with the LLM (it depends on
+  the LLMs outputs, and the LLM depends on its outputs). It's in the hot path of
+  every inference request, and so every microsecond counts.
+- **Efficient**: LLMs are resource intensive as it is, and using a draft model
+  shouldn't force a tradeoff in terms of teacher model power.
+- **Optimised for a high acceptance ratio**: The draft model should produce
+  good outputs. 'Good outputs' means that the teacher model accepts them
+  frequently.
+
+### Building the cache for our drafting system
+
+To build such a system at runtime, we need to store all the prompts and the
+generations of the model in memory. To do so, once each request to the Takeoff
+system completes, the tokens from the request are written to an internal,
+contiguous circular buffer, containing all the tokens from all of the requests
+that the system has seen. Since we don't have infinite memory, the buffer has a
+maximum size, and new tokens overwrite old ones.
+
+This simple representation is the basis for the SSD system. If the same request
+comes in multiple times, it will appear multiple times in the buffer. If the
+LLM generates the same output multiple times (for a different prompt), then the
+same output will appear multiple times in the buffer.
+
+At inference time, we have access to the 'prompt' so far: containing any system
+prompt, the user supplied prompt, and any generated tokens up to this point. If
+we search the buffer with the whole 'prompt', we'll get very few
+matches<Sidenote>Which is not to say this is never a useful thing to do: by
+doing after receiving the user prompt we can reuse our SSD cache as a cache
+in the traditional sense: i.e., we can return the exact same output for the
+exact same input, without performing speculative decoding or passing through
+the LLM at all.</Sidenote>. Instead, what we do is take a limited snippet
+from the prompt (the last 10 tokens, say), and find all of the times that that
+limited context appeared before in the buffer. Larger snippets produce outputs
+that align better with the teacher, but will appear more rarely. To make sure
+we get an output for any input, we perform several queries with decreasing
+prompt lengths<Sidenote>Once we get down to a single token, if we've not seen
+the token before, we can just return a random completion to be rejected by
+the LLM.</Sidenote>.
+
+```txt
+  ╔══════════════════════════════════════════════════════════╗
+  ║                                                          ║
+  ║      ┌─────┐     Generate tokens                         ║
+  ║      │ LLM │      ───────────→      "As an AI language   ║
+  ║      └─────┘                         model I cannot..."  ║
+  ║         ↑                                    │           ║
+  ║         │                                    ↓           ║
+  ║  Traverse tree                          Tokens added     ║
+  ║  to get draft              As         to suffix array    ║
+  ║  tokens                  ╱    ╲              │           ║
+  ║         │               ╱      ╲             │           ║
+  ║         ╰──            ╱        ╲           <╯           ║
+  ║                       ╱          ╲                       ║
+  ║                      I            an                     ║
+  ║                     ╱ ╲          ╱ ╲                     ║
+  ║                    ╱   ╲        ╱   ╲                    ║
+  ║                said     ╲      AI    expert              ║
+  ║                ╱ ╲       ╲    ╱ ╲                        ║
+  ║               ╱   ╲       ╲  ╱   ╲                       ║
+  ║         before  previously ╲╱  language                  ║
+  ║                             ╲    ╱ ╲                     ║
+  ║                              ╲  ╱   on                   ║
+  ║                               ╲╱                         ║
+  ║                             model                        ║
+  ║                                                          ║
+  ╚══════════════════════════════════════════════════════════╝
+```
+
+The simplest way to query the cache is to do a linear search: take our query
+context, and match it to previous occurrences of the same query in the circular
+buffer. This can be done efficiently with a string search<Sidenote>Aho-Corasick
+might be a good choice, for example, since we have multiple patterns in a
+batch. Also Boyer-Moore, KMP, etc.</Sidenote> in $O(n + m)$ time, where $n$
+is the length of the buffer and $m$ is the number of matches.
+
+But query time is the key part of this algorithm. And our cache is relatively
+static: we don't need to query very fresh data every time: what we want are the
+general statistical properties. Can we do better than linear time? The answer
+is yes, if we're willing to do some work to prepare our cache.
+
+To build effective algorithms we should always start with our data structures.
+A linear array is a good basis for further analysis. We can do preparation of
+more sophisticated data structures from our buffer at a regular interval, in
+parallel with the operation of our inference system: at the cost of some
+staleness in the data.
+
+In practice this is indeed what we do. Instead of searching for our query
+string in our circular buffer, at a periodic interval we construct a "suffix
+array" from our data, and then we run a more efficient search in this array
+during inference. But what is a suffix array?
+
+### Suffix array
+
+A suffix array is an array of all of the possible suffixes of a string, sorted
+in lexicographical<Sidenote>I.e. dictionary order: "a" < "b" < "bc",
+etc.</Sidenote> order. Consider the string "banana", and its suffixes,
+indexed by length.
+
+| Index | Suffix  |
+| ----- | ------- |
+| 0     | banana$ |
+| 1     | anana$  |
+| 2     | nana$   |
+| 3     | ana$    |
+| 4     | na$     |
+| 5     | a$      |
+| 6     | $       |
+
+The suffix array constructed from this string is just an array of the suffixes'
+positions in this list, but this time sorted in the lexicographical order on
+the suffixes. For the example above, the suffix array is:
+
+| Suffix Array Index | Original String Index | Suffix  |
+| ------------------ | --------------------- | ------- |
+| 0                  | 6                     | $       |
+| 1                  | 5                     | a$      |
+| 2                  | 3                     | ana$    |
+| 3                  | 1                     | anana$  |
+| 4                  | 0                     | banana$ |
+| 5                  | 4                     | na$     |
+| 6                  | 2                     | nana$   |
+
+Each element of the array indicates the position in the original string at
+which the corresponding suffix starts. The order of the array gives the
+lexicographical ordering on these suffixes.
+
+The suffix array is of length $n$, and can be constructed in time $O(n)$ (but
+we'll construct the array in the background as discussed, so this $O(n)$ cost
+is traded for cache staleness).
+
+### Getting drafts from our suffix array
+
+Why do we bother constructing this new object? Because this 'array of possible
+suffixes of our circular buffer' is exactly the list of all of the possible
+places in that buffer where our context can appear! Further, sorting them into
+lexicographical order means that we can search this list of places in time
+$O(logn)$ using binary search (see Appendix 1 for a worked example). In fact,
+we can search for all of the suffixes that begin with a specific prefix in time
+$O(logn)$, by searching for the lexicographically first and last matching
+suffix, and considering all the prefixes between them in the suffix array.
+
+Once we've got all the times the suffix has appeared before, we need to pick
+the 'best' sequence to use as our draft. With the guiding principle that
+sequences that have appeared many times before are likely to be outputs that
+have been generated many times before, we just count the raw frequency of each
+matching suffix (when truncated to our chosen draft length<Sidenote>The actual
+suffixes in the suffix array are unique, but if we only want drafts of length
+$10$ (for example), then many suffixes can coincide over that
+span.</Sidenote>), and pick the highest. This is easily achieved in time
+$O(n_{matches})$ with a hash table<Sidenote>Depending on the scaling of
+$n_{matches}$, careful consideration is required not to blow up the worst case
+of our algorithm. For example, if our buffer consists of a single character
+repeated $n$ times, then searching for that character will return $n_{matches}
+  ~ O(n)$ sequences, and our hash table approach will spend $O(n)$ time
+figuring out which is the most frequent. If we're happy with approximate
+algorithms, the simplest approach takes some tractable but statistically
+significant subset of size $K$ matches, and only considers them. If we want
+to be exact, then we would need to do additional preprocessing when we
+construct our suffix array.</Sidenote>.
+
+## Results
+
+In practice we see SSD increasing the performance of a language model over
+time, as the SSD cache is populated and common requests are seen multiple
+times. Occasionally you get very similar requests and so have extremely fast
+generation as almost all tokens are accepted. When you get no accepted tokens,
+you slow down to baseline speed as you only accept a single token per pass.
+
+In the results shown below, we demonstrate that as the model cache grows, the
+model gets faster and faster. The baseline speed was around 60 tok/s for this
+example, a Llama 7B running on a consumer GPU. As the cache grows to ~MB in
+size, the average model speed has increased to 100-120 tok/s. Certain requests
+(shown in gray) are accelerated up to 200 tok/s when you get good cache hits.
+
+![SSD Performance Results](/blog-images/ssd-performance-results.png)
+_Results from running a language model over time with Spacelike-Speculative
+Decoding. As the speculative cache gets populated the model speeds up._
+
+It is notable that this is a much smaller cache size than in comparable
+methods. The closest cousin to SSD is the work REST: Retrieval-Based
+Speculative Decoding. This uses a text corpora that is turned into a similar
+cache offline, and used to speculate from. In their work to see comparable
+speedups needed almost 30GB of draft text. This speedup was also dependent on
+the model being used for tasks that aligned with the text corpora. This is
+evidence towards the conclusion that the past outputs of a model are a better
+source of draft tokens than text from separate text corpora.
+
+![SSD vs REST Comparison](/blog-images/ssd-comparison-chart.png)
+_Results from the paper: REST: Retrieval-Based Speculative Decoding. To get
+comparable speedups needs sources of text thousands of times larger than with
+SSD._
+
+## Conclusion
+
+Spacelike-Speculative Decoding (SSD) is a novel technique that can
+significantly improve the speed of language models. By using a cache of
+previously generated text, SSD can find and reuse common sequences of tokens,
+reducing the amount of computation required to generate new text.
+
+Our results show that SSD can improve the speed of a language model by up to
+200%. This speedup is particularly pronounced for common requests, which can be
+generated almost instantly.
+
+SSD is a simple and effective technique that can be used to improve the
+performance of any language model. We believe that SSD will be a valuable tool
+for developers and researchers who are looking to build faster and more
+efficient language models.
