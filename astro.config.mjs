@@ -10,6 +10,8 @@ import { remarkReadingTime } from './src/plugins/remark-reading-time.mjs'
 import { remarkModifiedTime } from './src/plugins/remark-modified-time.mjs'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
+import rehypeSlug from 'rehype-slug'
+import rehypeAutolinkHeadings from 'rehype-autolink-headings'
 
 // https://astro.build/config
 export default defineConfig({
@@ -29,6 +31,26 @@ export default defineConfig({
   },
   markdown: {
     remarkPlugins: [remarkReadingTime, remarkModifiedTime, remarkMath],
-    rehypePlugins: [rehypeFigureTitle, rehypeAccessibleEmojis, rehypeKatex],
+    rehypePlugins: [
+      rehypeFigureTitle,
+      rehypeAccessibleEmojis,
+      rehypeKatex,
+      rehypeSlug,
+      [rehypeAutolinkHeadings, {
+        behavior: 'append',
+        properties: {
+          className: ['heading-anchor'],
+          ariaLabel: 'Link to this section',
+        },
+        content: {
+          type: 'element',
+          tagName: 'span',
+          properties: {
+            className: ['anchor-icon'],
+          },
+          children: [{ type: 'text', value: '§' }]
+        }
+      }]
+    ],
   },
 })

@@ -1,0 +1,135 @@
+---
+title: 'AI Gateways'
+description: |
+  Why AI gateways are interesting
+pubDate: 'Sep 22 2025'
+slug: a4ce457a-7e2d-4304-ad5a-e7168725b5b9
+index: false
+---
+
+import Sidenote from '../../components/Sidenote.astro'
+
+There's an emerging category of product in vogue at the moment, mostly designed for
+large organizations that use lots of different LLM APIs. It's usually called an LLM Gateway, or an AI Gateway<Sidenote>[here](https://www.litellm.ai/),
+[here](https://konghq.com/en-gb/products/kong-ai-gateway),
+[here](https://vercel.com/docs/ai-gateway),
+[here](https://developers.cloudflare.com/ai-gateway/), [here](https://portkey.ai/) </Sidenote>, or something like that.
+
+At [Doubleword](https://doubleword.ai) we're releasing our [control
+layer](https://www.doubleword.ai/control-layer), another product in this
+category. I want to talk about why you'd need this, what I think you should
+value when choosing a gateway, and why we think we do it well.
+
+## The case for AI Gateways
+
+### How LLM application building has changed
+
+The way to produce intelligence that was tailored to your use-case before LLMs
+ate everything was that you'd store, manage and maintain a massive trove of
+data. Then a team of expensive data scientists would run an algorithm to encode
+all that data into a 'model', a complex and fairly inflexible artefact, that
+you'd then deploy to provide the same sort of insight over and over again.
+
+With LLMs its changed a bit. LLMs when scaled up do seem to produce 'general
+purpose intelligence' in some sort of controversial but meaningful way. A lot
+of what would require lots of specialization before just doesn't any more. On
+the other hand, the incentives for the companies that do provide these large
+models to flatten the whole space into one big prompt to their preferred model
+means that the advice for how to build interesting AI applications is
+suspiciously one-note.
+
+In general, we haven't found the right balance here. Building your own model
+from your data from scratch is too much, but writing your prompt once and
+sending it to openAI is too little.
+
+### How to specialise in an age of generalist models
+
+In practise, to build a good application with some level of specialisation,
+you're going to have to do some 'fine-tuning' - in the original sense, meaning
+turning your application's behaviour to your desired end.
+
+As I see it, there are three different levels you might go through, in
+increasing levels of difficulty:
+
+1. Modifying your system prompt (inc. context engineering, etc.)
+2. Picking the best model amongst a set of providers.
+3. Building a model that's meaningfully your own, and hosting it efficiently.
+
+I work for [Doubleword](https://www.doubleword.ai/), a company that works on
+making point 3 possible. In the long run, for applications where you want the
+highest performance, the deepest integration, and the most control, this is the
+right way to operate. This is what we've been calling [InferenceOps](https://www.doubleword.ai/resources/what-is-inferenceops-defining-the-function-behind-scalable-ai).
+
+But that's not all applications. All applications have to start somewhere, and
+for most people, it shouldn't be with buying a rack of
+[B200](https://www.nvidia.com/en-gb/data-center/dgx-b200/)s. So we're going to
+use APIs.
+
+### Why AI gateways
+
+API models are frustrating for a lot of different reasons. Most of them boil
+down to the same thing - someone else is managing them.
+It means that they can be unreliable without
+[accountability](https://www.anthropic.com/engineering/a-postmortem-of-three-recent-issues),
+that they can
+[deprecate](https://www.doubleword.ai/resources/shifting-sands-openais-fluctuating-model-performance-and-the-impact-on-developers)
+models that you were relying on, you don't get privacy, data residency, or
+tenancy
+[guarantees](https://www.doubleword.ai/resources/genai-in-regulated-industries).
+
+The dream of self-hosting is that you can own your own stack - that you can
+have more control over your operations, and not fail because someone else did a
+bad job.
+
+The control layer is our way to help people get some of these benefits from API
+models.
+
+## How to build an AI gateway
+
+AI gateways sit between your users and LLM APIs. Where your developers would
+call the openAI API, they instead call an internal API that you make
+available.<Sidenote>Or another providers "openAI-compatible API", see [here](https://developers.googleblog.com/en/gemini-is-now-accessible-from-the-openai-library/), [here](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html), [here](https://docs.claude.com/en/api/openai-sdk) </Sidenote>
+
+```txt
+       ┌─────────────┐  ┌─────────────┐
+       │   OpenAI    │  │ Anthropic   │
+       └─────────────┘  └─────────────┘
+              ▲               ▲
+              │               │
+            ┌─────────────────┼───────────────────────┐
+            │ │               │   ┌───────────────┐   │
+            │ │               │   │               │   │
+            │ │               │   │  self-hosted  │   │
+            │ │               │   │    models     │   │
+            │ │               │   │               │   │
+            │ │               │   └───────────────┘   │
+            │ │               │            ▲          │
+            │ └───────────────┼────────────┘          │
+            │                 │                       │
+            │         ┌───────────────┐               │
+            │         │   AI Gateway  │               │
+            │         └───────────────┘               │
+            │                 ▲                       │
+            │                 │                       │
+            │          ┌──────────────┐               │
+            │          │    Users     │               │
+            │          └──────────────┘               │
+            └─────────────────────────────────────────┘
+
+```
+
+Beneath the hood, the service you've configured at that internal API receives
+the request from that developer and sends it where it needs to go.
+
+It's not a big change in infrastructure, but it does two big things:
+
+1. It lets you understand and build on your teams usage of AI in real-time.
+2. It creates a single point of failure, and slows down every request you make.
+
+### Understanding AI usage
+
+### Why its easy to do badly
+
+Infrastructure is hard. It runs underneath other stuff.
+
+## Outlook

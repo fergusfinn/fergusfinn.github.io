@@ -2,7 +2,7 @@
 title: 'Scheduling in inference engines'
 description: |
   A look into how inference engines choose which requests to process
-pubDate: 'Aug 28 2025'
+pubDate: 'Sep 22 2025'
 ---
 
 import Sidenote from '../../components/Sidenote.astro'
@@ -423,8 +423,8 @@ already in the batch grow over time. When they grow, too large, one (or more)
 sequences will get preempted. When the sequence is preempted, we throw away<Sidenote>Or swap out, but the default setting in vLLM is to recompute.</Sidenote>
 all the work we've done so far, and the sequence has to start again later.
 
-Given a sequence of requests, how can we order them to maximise the amount of
-compute that the engine performs?
+Given a sequence of requests, how can a nefarious user order them to maximise
+the amount of useless compute that the engine performs?
 
 First, simplify. Assume each sequence has $1$ prefill token. Assume a KV cache
 size of $16$. Assume that each sequence wants to generate $16$ output tokens.

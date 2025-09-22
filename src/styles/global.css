@@ -16,11 +16,10 @@
 	--color-primary-dark: #9bd4e4;
 }
 
-/* html { */
-/* 	scroll-padding-top: 6.5rem; */
-/* 	scroll-behavior: smooth; */
-/* } */
-/**/
+html {
+	scroll-padding-top: 6rem;
+	scroll-behavior: smooth;
+}
 .app-container {
 	@apply container mx-auto px-6 sm:px-12 lg:px-8 xl:px-12 2xl:px-16;
 }
@@ -166,5 +165,32 @@
 		background: var(--color-background-dark);
 		border-left-color: var(--color-primary-dark);
 	}
+}
+
+/* Heading anchor links */
+.heading-anchor {
+	@apply text-black dark:text-white opacity-0 transition-opacity duration-200;
+	text-decoration: none;
+	font-size: inherit;
+}
+
+.anchor-icon {
+	margin-left: 0.5rem;
+	font-size: calc(1em - 20%);
+}
+
+/* Show anchor on heading hover */
+.prose h1:hover .heading-anchor,
+.prose h2:hover .heading-anchor,
+.prose h3:hover .heading-anchor,
+.prose h4:hover .heading-anchor,
+.prose h5:hover .heading-anchor,
+.prose h6:hover .heading-anchor {
+	@apply opacity-100;
+}
+
+/* Also show on anchor hover */
+.heading-anchor:hover {
+	@apply opacity-100;
 }
 

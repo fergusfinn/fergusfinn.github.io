@@ -7,18 +7,24 @@ interface Props {
 
 const { headings } = Astro.props
 
+// Strip anchor links from heading text
+function cleanHeadingText(text: string): string {
+	return text.replace(/§$/, '').trim()
+}
+
 // Group headings: h2 as top-level, h3 as nested under previous h2
 interface TOCHeading extends MarkdownHeading {
 	children: MarkdownHeading[]
+	cleanText: string
 }
 const toc: TOCHeading[] = []
 let lastH2: TOCHeading | null = null
 for (const heading of headings) {
 	if (heading.depth === 2) {
-		lastH2 = { ...heading, children: [] }
+		lastH2 = { ...heading, children: [], cleanText: cleanHeadingText(heading.text) }
 		toc.push(lastH2)
 	} else if (heading.depth === 3 && lastH2) {
-		lastH2.children.push(heading)
+		lastH2.children.push({ ...heading, cleanText: cleanHeadingText(heading.text) })
 	}
 }
 ---
@@ -31,7 +37,7 @@ for (const heading of headings) {
 				{toc.map((h2) => (
 					<li>
 						<a class="hover:underline underline-offset-4" href={`#${h2.slug}`}>
-							{h2.text}
+							{h2.cleanText}
 						</a>
 						{h2.children.length > 0 && (
 							<ul class="ml-4 mt-2 space-y-2 border-l border-gray-300 dark:border-gray-700 pl-4">
@@ -41,7 +47,7 @@ for (const heading of headings) {
 											class="hover:underline underline-offset-4 text-sm opacity-80"
 											href={`#${h3.slug}`}
 										>
-											{h3.text}
+											{h3.cleanText}
 										</a>
 									</li>
 								))}
