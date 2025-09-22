@@ -14,7 +14,11 @@ function cleanHeadingText(text: string): string {
 
 // Group headings: h2 as top-level, h3 as nested under previous h2
 interface TOCHeading extends MarkdownHeading {
-	children: MarkdownHeading[]
+	children: TOCChild[]
+	cleanText: string
+}
+
+interface TOCChild extends MarkdownHeading {
 	cleanText: string
 }
 const toc: TOCHeading[] = []
@@ -24,7 +28,7 @@ for (const heading of headings) {
 		lastH2 = { ...heading, children: [], cleanText: cleanHeadingText(heading.text) }
 		toc.push(lastH2)
 	} else if (heading.depth === 3 && lastH2) {
-		lastH2.children.push({ ...heading, cleanText: cleanHeadingText(heading.text) })
+		lastH2.children.push({ ...heading, cleanText: cleanHeadingText(heading.text) } as TOCChild)
 	}
 }
 ---

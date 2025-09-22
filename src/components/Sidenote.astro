@@ -6,7 +6,7 @@ export interface Props {
 const { id } = Astro.props
 
 // Generate a unique ID if not provided
-const sidenoteId = id || `sidenote-${Math.random().toString(36).substr(2, 9)}`
+const sidenoteId = id || `sidenote-${Math.random().toString(36).substring(2, 11)}`
 ---
 
 <span class="sidenote-wrapper" data-sidenote-id={sidenoteId}>
