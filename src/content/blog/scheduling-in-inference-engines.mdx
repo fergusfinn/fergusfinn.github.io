@@ -457,8 +457,12 @@ the first slot ever completes.
 Each completion of length $N$ triggers $O(N)$ preemptions. Is this
 optimal?<Sidenote>Pessimal?</Sidenote>
 
-## Outlook
+## Conclusion
 
-I think there's a lot of efficiency to be gained from doing scheduling right in
-LLM inference. The tradeoffs are relatively unexplored in production systems.
-It will be interesting to see how the field develops.
+The vLLM scheduler is simple: FCFS, preempt when you run out of space, resume when you can. It's predictable, it's fair, and it works.
+
+But the pathological cases aren't academic. Send requests in the wrong order and you trigger convoy effects. Let the batch grow too large and you get thrashing.
+
+The problem gets harder as systems improve. Longer context windows mean more fragmentation risk. Prefix caching creates exploitable locality. Multi-tenant workloads have competing priorities. Current schedulers mostly ignore this.
+
+Whether anyone builds something smarter, or whether simple continues to win—hard to say.
