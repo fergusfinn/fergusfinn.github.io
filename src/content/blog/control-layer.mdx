@@ -45,20 +45,21 @@ sending it to openAI is too little.
 ### How to specialise in an age of generalist models
 
 In practise, to build a good application with some level of specialisation,
-you're going to have to do some 'fine-tuning' - in the original sense, meaning
-turning your application's behaviour to your desired end.
+you're going to have to do some extra work, so 'specialise' your model
 
 As I see it, there are three different levels you might go through, in
 increasing levels of difficulty:
 
-1. Modifying your system prompt (inc. context engineering, etc.)
-2. Picking the best model amongst a set of providers.
-3. Building a model that's meaningfully your own, and hosting it efficiently.
+1. Modifying your system prompt.
+2. Picking the best model amongst a set of API providers.
+3. Owning your own stack. Choosing self-hosted AI models, enhancing them such
+   that they're meaningfully your own, and then hosting them consistently,
+   efficiently, and reliably.
 
 I work for [Doubleword](https://www.doubleword.ai/), a company that works on
 making point 3 possible. In the long run, for applications where you want the
 highest performance, the deepest integration, and the most control, this is the
-right way to operate. This is what we've been calling [InferenceOps](https://www.doubleword.ai/resources/what-is-inferenceops-defining-the-function-behind-scalable-ai).
+right way to operate. This is part of what we've been calling [InferenceOps](https://www.doubleword.ai/resources/what-is-inferenceops-defining-the-function-behind-scalable-ai).
 
 But that's not all applications. All applications have to start somewhere, and
 for most people, it shouldn't be with buying a rack of
@@ -66,6 +67,8 @@ for most people, it shouldn't be with buying a rack of
 end up using APIs.
 
 ### Why AI gateways
+
+#### For API models
 
 API models are frustrating for a lot of different reasons. Most of them boil
 down to the same thing - someone else is managing them.
@@ -82,7 +85,44 @@ have more control over your operations, and not fail because someone else did a
 bad job.
 
 The control layer is our way to help people get some of these benefits from API
-models.
+models. The control layer is a layer of insulation between your developers and
+the unreliable LLM APIs. Its a single point of control, in which you can define
+stable APIs that your developers can rely on, even as the API sands shift
+underneath you. Changing a model can be done in one place. Visibility into
+every request means that you control what does and doesn't get sent to API
+models, so you know at a glance what data is leaving your organization. Rate
+limits, virtual API keys, and flexible user management, mean that you can
+control and secure your use of LLM APIs, without being locked into any single
+provider.
+
+#### For self-hosted models
+
+An AI gateway transforms a self-hosted stack into a production ready resource.
+If you deploy an inference stack on your infrastructure: whether it be local
+and
+single-tenant<Sidenote>[llama.cpp](https://github.com/ggml-org/llama.cpp), or
+various [wrappers](https://ollama.com/)</Sidenote>, or large scale &
+multi-tenant<Sidenote>Single container inference like
+[vLLM](https://github.com/vllm-project/vllm),
+[SGLang](https://github.com/sgl-project/sglang), or multi-container
+distributed inference like [Dynamo](https://github.com/ai-dynamo/dynamo), the
+[Doubleword](https://github.com/doublewordai/inference-stack) inference
+stack, or vllm's [production
+stack](https://github.com/vllm-project/production-stack)</Sidenote>, then you
+should understand your security posture.
+
+Nowadays, all the popular inference engines expose web APIs. By and large, they
+provide no means to authenticate or authorize users of those APIs. Nor should
+they - its not part of their job. But if the default is nothing, then lots of
+people will do nothing. And nothing is what people do in practise<Sidenote>See
+[here](https://blogs.cisco.com/security/detecting-exposed-llm-servers-shodan-case-study-on-ollama)
+or [here](https://www.upguard.com/blog/llama-cpp-prompt-leak) for
+investigations of how many public, unauthenticated self-hosted LLM servers
+there are</Sidenote>.
+
+Self-hosted inference stacks need an authentication layer. The control layer is
+a simple & flexible way to provide that layer, in a way that is designed to
+scale from the smallest deployments, to massive multi-tenant systems.
 
 ## Anatomy of an AI Gateway
 
@@ -173,8 +213,10 @@ required permissions, and configurable logging means that you don't store what
 you don't want.
 
 <Sidenote unnumbered>
- High level analytics, visible to users who manage the platform, to understand
- when, how, and how effectively your users are using AI.
+ High level, customisable analytics, visible to users who manage the platform,
+ to understand when, how, and how effectively your users are using AI. These
+ analytics give you the ability to see where your on AI inference costs are,
+ and show you how to control them.
 </Sidenote>
 ![Analytics](../../assets/blogimages/control-layer/analytics.png)
 
@@ -200,13 +242,16 @@ your team has granted them access.
 Infrastructure is hard. An AI gateway will sit in the hot path of every single
 request your organization makes to an AI model. This could be hundreds of
 thousands of requests per second. If the gateway goes down, you can be cut off
-completely.
+completely. When we were looking for an authentication/authorization layer for
+our self-hosted inference stack, it became clear that we needed to build
+something that took this responsibility seriously.
 
-That makes a few things absolutely paramount:
+This responsibility makes a few things absolutely paramount:
 
 #### Reliability
 
-We built our control layer in Rust. Rust's error modelling means that runtime
+We built our control layer from the ground up in Rust. Rust's error modelling
+means that runtime
 panics are incredibly rare.
 
 We maintain 100% test coverage of every code path that's exercised along the
@@ -259,17 +304,25 @@ trade-off eventually breaks down. The instability of shifting models,
 unpredictable performance, and opaque usage data is not a viable foundation
 for production systems.
 
-An AI gateway is the correct architectural response. But adding a new service
-to the hot path of every request is a decision that can't be taken lightly. A
-gateway that isn't fundamentally performant and reliable ceases to be a
-solution and becomes part of the problem, compromising the very applications
-it's meant to support. It must be treated as core infrastructure.
+Self hosted LLMs are an important part of the answer. But as it stands, they're
+missing important components to make them viable for production use.
 
-We built the Control Layer to be that infrastructure. The design choices - a
-single binary in Rust, zero-copy request handling, and an obsession with
-simplicity - are a direct response to the challenges of building a gateway
-correctly. We intend to make it a solid foundation for providing the control
-and observability that professional AI development requires.
+An AI gateway is the correct architectural response to both of these problems.
+But adding a new service to the hot path of every request is a decision that
+can't be taken lightly. A gateway that isn't fundamentally performant and
+reliable ceases to be a solution and becomes part of the problem, compromising
+the very applications it's meant to support. It must be treated as core
+infrastructure.
+
+The control layer has been that infrastructure for our in-house inference stack
+for a while now. The design choices - a single binary in Rust, zero-copy
+request handling, and an obsession with simplicity - are a direct response to
+the challenges of building a gateway correctly. We intend to make it a solid
+foundation for providing the control and observability that professional AI
+development requires.
+
+We're releasing it open source, so that other teams can benefit from it too.
+It's now available on [github](https://github.com/doublewordai/control-layer)<Sidenote>We welcome contributions, & please file issues if you experience them</Sidenote>.
 
 This is the first step towards a mature InferenceOps practice. It's about
 moving beyond one-off API calls and building a deliberate, robust system for
