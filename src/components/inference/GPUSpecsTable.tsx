@@ -9,7 +9,7 @@ export default function GPUSpecsTable() {
       <table class="min-w-full border-collapse">
         <thead>
           <tr class="border-b border-gray-300 dark:border-gray-700">
-            <th colspan="2" class="text-left py-2 px-4 font-semibold">{spec.name}</th>
+            <th colSpan={2} class="text-left py-2 px-4 font-semibold">{spec.name}</th>
           </tr>
         </thead>
         <tbody>

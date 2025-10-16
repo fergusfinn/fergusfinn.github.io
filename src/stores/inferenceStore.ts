@@ -228,7 +228,7 @@ export const canOverlapPrefills = computed(
 // Chunked prefilling: total time calculation
 export const totalTimeChunked = computed(
   [totalDecodeTime, canOverlapPrefills, totalPrefillTime, availableTokensForPrefill, configStore],
-  (decode, canOverlap, prefillTime, available, config) => {
+  (decode, canOverlap, _prefillTime, available, config) => {
     if (canOverlap) {
       // All prefills fit within decode capacity
       return decode

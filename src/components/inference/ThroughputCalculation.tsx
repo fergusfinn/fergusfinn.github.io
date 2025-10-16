@@ -4,10 +4,8 @@ import {
   throughputPerGPU,
   totalPrefillTime,
   totalDecodeTime,
-  totalTime,
   totalTimeWithMode,
   totalOutputTokens,
-  prefillTimePercent,
   configStore,
   chunkedPrefillingEnabled,
   canOverlapPrefills,
@@ -20,7 +18,6 @@ export default function ThroughputCalculation() {
   const prefillTime = useStore(totalPrefillTime)
   const decodeTime = useStore(totalDecodeTime)
   const totalT = useStore(totalTimeWithMode)
-  const totalTSequential = useStore(totalTime)
   const outputTokens = useStore(totalOutputTokens)
   const config = useStore(configStore)
   const chunkedMode = useStore(chunkedPrefillingEnabled)

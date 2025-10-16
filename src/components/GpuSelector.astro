@@ -53,10 +53,18 @@ const gpus: GpuSpec[] = [
 <script>
 	import Chart from 'chart.js/auto';
 	import ChartDataLabels from 'chartjs-plugin-datalabels';
+	import type { GpuSpec } from './GpuSelector.astro';
 
 	Chart.register(ChartDataLabels);
 
-	const gpus = [
+	// Extend Window interface for updateDynamicMath
+	declare global {
+		interface Window {
+			updateDynamicMath?: (gpu: GpuSpec) => void;
+		}
+	}
+
+	const gpus: GpuSpec[] = [
 		{ model: "A10", tflops: 125, bandwidth: 0.6, memory: 24 },
 		{ model: "L4", tflops: 242, bandwidth: 0.3, memory: 24 },
 		{ model: "A100 80GB", tflops: 312, bandwidth: 2, memory: 80 },
@@ -71,9 +79,9 @@ const gpus: GpuSpec[] = [
 	]
 
 	let selectedIndex = 0
-	let chart = null
+	let chart: Chart | null = null
 
-	function createChart(canvas, selectedIdx) {
+	function createChart(canvas: HTMLCanvasElement, selectedIdx: number): void {
 		const ctx = canvas.getContext('2d')
 		if (!ctx) return
 
@@ -141,7 +149,7 @@ const gpus: GpuSpec[] = [
 								family: "'Source Sans 3', sans-serif"
 							}
 						},
-						formatter: function(value, context) {
+						formatter: function(_value, context) {
 							return gpus[context.datasetIndex].model
 						}
 					}
@@ -189,12 +197,12 @@ const gpus: GpuSpec[] = [
 	}
 
 	// Update all elements with data-gpu-value attributes
-	function updateGpuValues(gpu) {
+	function updateGpuValues(gpu: GpuSpec): void {
 		const elements = document.querySelectorAll('[data-gpu-value]')
 		elements.forEach((el) => {
 			const field = el.getAttribute('data-gpu-value')
-			if (field && gpu[field] !== undefined) {
-				el.textContent = gpu[field].toString()
+			if (field && field in gpu) {
+				el.textContent = gpu[field as keyof GpuSpec].toString()
 			}
 		})
 
