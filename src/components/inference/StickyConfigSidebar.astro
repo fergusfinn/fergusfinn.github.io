@@ -1,0 +1,37 @@
+---
+import ConfigTable from './ConfigTable.tsx'
+---
+
+<div class="sidebar-content">
+  <h3 class="sidebar-title">Configuration</h3>
+  <ConfigTable compact={true} client:load />
+</div>
+
+<style>
+  .sidebar-content {
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.5rem;
+    padding: 1rem;
+    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+    margin-left: -1rem; /* Extend card to the left to compensate for padding */
+    width: calc(100% + 1rem); /* Extend width to match */
+  }
+
+  :global(.dark) .sidebar-content {
+    background: #1f2937;
+    border-color: #374151;
+  }
+
+  .sidebar-title {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 1rem 0;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  :global(.dark) .sidebar-title {
+    border-color: #374151;
+  }
+</style>

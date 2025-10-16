@@ -7,6 +7,7 @@
 	--font-sans: 'Source Sans 3', sans-serif;
 	--font-serif: 'Crimson Pro', serif;
 	--font-mono: 'JetBrains Mono', monospace;
+	--font-math: 'Noto Sans Math', sans-serif;
 
 	--color-foreground: #0c0c0c;
 	--color-foreground-dark: #fafafa;
@@ -209,6 +210,17 @@ html {
 	}
 }
 
+/* Remove backticks from inline code */
+.prose code::before,
+.prose code::after {
+	content: none;
+}
+
+/* Make inline code same size as body text */
+.prose code {
+	font-size: 0.85em !important;
+}
+
 /* Heading anchor links */
 .heading-anchor {
 	@apply text-black dark:text-white opacity-0 transition-opacity duration-200;
@@ -234,5 +246,31 @@ html {
 /* Also show on anchor hover */
 .heading-anchor:hover {
 	@apply opacity-100;
+}
+
+/* Compact table styling for markdown tables */
+.prose table {
+	@apply w-full my-6 text-base;
+	border-collapse: separate;
+	border-spacing: 0;
+}
+
+.prose table th,
+.prose table td {
+	@apply px-4 py-2 text-left border-b border-foreground/10 dark:border-foreground-dark/10;
+	transition: background-color 0.2s ease;
+}
+
+.prose table th {
+	@apply font-semibold bg-foreground/5 dark:bg-foreground-dark/5;
+	font-family: var(--font-sans);
+}
+
+.prose table tbody tr:hover td {
+	@apply bg-primary/5 dark:bg-primary-dark/5;
+}
+
+.prose table tr:last-child td {
+	@apply border-b-0;
 }
 

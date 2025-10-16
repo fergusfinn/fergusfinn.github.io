@@ -1,0 +1,356 @@
+---
+export interface GpuSpec {
+	model: string
+	tflops: number
+	bandwidth: number
+	memory: number
+}
+
+const gpus: GpuSpec[] = [
+	{ model: "A10", tflops: 125, bandwidth: 0.6, memory: 24 },
+	{ model: "L4", tflops: 242, bandwidth: 0.3, memory: 24 },
+	{ model: "A100 80GB", tflops: 312, bandwidth: 2, memory: 80 },
+	{ model: "H100", tflops: 990, bandwidth: 3.35, memory: 80 },
+	{ model: "RTX 4090", tflops: 165.2, bandwidth: 1, memory: 24 },
+	{ model: "RTX 5090", tflops: 209.5, bandwidth: 1.79, memory: 32 },
+	{ model: "RTX 4000 Ada", tflops: 81.9, bandwidth: 0.36, memory: 20 },
+	{ model: "RTX 6000 Ada", tflops: 364.25, bandwidth: 0.96, memory: 48 },
+	{ model: "RTX PRO 6000", tflops: 500, bandwidth: 1.8, memory: 96 },
+	{ model: "A40", tflops: 149.7, bandwidth: 0.696, memory: 48 },
+	{ model: "L40S", tflops: 362, bandwidth: 0.864, memory: 48 }
+]
+---
+
+<div class="gpu-selector-wrapper">
+	<div class="gpu-selector-gutter">
+		<select id="gpu-select" class="gpu-dropdown">
+			{gpus.map((gpu, index) => (
+				<option value={index} selected={index === 0}>
+					{gpu.model}
+				</option>
+			))}
+		</select>
+		<div class="gpu-specs" id="gpu-specs">
+			<div class="spec-item">
+				<span class="spec-label">16-bit TFlops:</span>
+				<span class="spec-value" id="tflops-value">{gpus[0].tflops}</span>
+			</div>
+			<div class="spec-item">
+				<span class="spec-label">Memory BW:</span>
+				<span class="spec-value" id="bandwidth-value">{gpus[0].bandwidth} TB/s</span>
+			</div>
+			<div class="spec-item">
+				<span class="spec-label">Memory:</span>
+				<span class="spec-value" id="memory-value">{gpus[0].memory} GB</span>
+			</div>
+		</div>
+	</div>
+	<div class="chart-container">
+		<canvas id="gpu-chart"></canvas>
+	</div>
+</div>
+
+<script>
+	import Chart from 'chart.js/auto';
+	import ChartDataLabels from 'chartjs-plugin-datalabels';
+
+	Chart.register(ChartDataLabels);
+
+	const gpus = [
+		{ model: "A10", tflops: 125, bandwidth: 0.6, memory: 24 },
+		{ model: "L4", tflops: 242, bandwidth: 0.3, memory: 24 },
+		{ model: "A100 80GB", tflops: 312, bandwidth: 2, memory: 80 },
+		{ model: "H100", tflops: 990, bandwidth: 3.35, memory: 80 },
+		{ model: "RTX 4090", tflops: 165.2, bandwidth: 1, memory: 24 },
+		{ model: "RTX 5090", tflops: 209.5, bandwidth: 1.79, memory: 32 },
+		{ model: "RTX 4000 Ada", tflops: 81.9, bandwidth: 0.36, memory: 20 },
+		{ model: "RTX 6000 Ada", tflops: 364.25, bandwidth: 0.96, memory: 48 },
+		{ model: "RTX PRO 6000", tflops: 500, bandwidth: 1.8, memory: 96 },
+		{ model: "A40", tflops: 149.7, bandwidth: 0.696, memory: 48 },
+		{ model: "L40S", tflops: 362, bandwidth: 0.864, memory: 48 }
+	]
+
+	let selectedIndex = 0
+	let chart = null
+
+	function createChart(canvas, selectedIdx) {
+		const ctx = canvas.getContext('2d')
+		if (!ctx) return
+
+		// Destroy existing chart if it exists
+		if (chart) {
+			chart.destroy()
+		}
+
+		// Create datasets for selected and unselected points
+		const datasets = gpus.map((gpu, idx) => ({
+			label: gpu.model,
+			data: [{ x: gpu.tflops, y: gpu.bandwidth }],
+			backgroundColor: idx === selectedIdx ? '#000000' : '#808080',
+			borderColor: idx === selectedIdx ? '#000000' : '#404040',
+			borderWidth: idx === selectedIdx ? 2 : 1,
+			pointRadius: idx === selectedIdx ? 8 : 5,
+			pointHoverRadius: idx === selectedIdx ? 8 : 5,
+		}))
+
+		chart = new Chart(ctx, {
+			type: 'scatter',
+			data: { datasets },
+			options: {
+				responsive: true,
+				maintainAspectRatio: true,
+				aspectRatio: 1.5,
+				animation: false,
+				layout: {
+					padding: {
+						top: 30,
+						right: 20,
+						bottom: 20,
+						left: 10
+					}
+				},
+				plugins: {
+					legend: {
+						display: false
+					},
+					tooltip: {
+						callbacks: {
+							label: function(context) {
+								const gpu = gpus[context.datasetIndex]
+								return [
+									gpu.model,
+									`TFlops: ${gpu.tflops}`,
+									`Bandwidth: ${gpu.bandwidth} TB/s`,
+									`Memory: ${gpu.memory} GB`
+								]
+							}
+						}
+					},
+					datalabels: {
+						display: true,
+						align: 'bottom',
+						anchor: 'end',
+						offset: 12,
+						color: function(context) {
+							return context.datasetIndex === selectedIdx ? '#000000' : '#666666'
+						},
+						font: function(context) {
+							return {
+								size: context.datasetIndex === selectedIdx ? 13 : 11,
+								weight: context.datasetIndex === selectedIdx ? 'bold' : 'normal',
+								family: "'Source Sans 3', sans-serif"
+							}
+						},
+						formatter: function(value, context) {
+							return gpus[context.datasetIndex].model
+						}
+					}
+				},
+				scales: {
+					x: {
+						title: {
+							display: true,
+							text: '16-bit TFlops',
+							color: '#000000',
+							font: { size: 15, weight: 'bold', family: "'Source Sans 3', sans-serif" },
+							padding: { top: 10, bottom: 0 }
+						},
+						grid: {
+							color: '#e0e0e0',
+							lineWidth: 1
+						},
+						ticks: {
+							color: '#000000',
+							font: { size: 13, family: "'Source Sans 3', sans-serif" },
+							padding: 8
+						}
+					},
+					y: {
+						title: {
+							display: true,
+							text: 'Memory Bandwidth (TB/s)',
+							color: '#000000',
+							font: { size: 15, weight: 'bold', family: "'Source Sans 3', sans-serif" },
+							padding: { top: 0, bottom: 10 }
+						},
+						grid: {
+							color: '#e0e0e0',
+							lineWidth: 1
+						},
+						ticks: {
+							color: '#000000',
+							font: { size: 13, family: "'Source Sans 3', sans-serif" },
+							padding: 8
+						}
+					}
+				}
+			}
+		})
+	}
+
+	// Update all elements with data-gpu-value attributes
+	function updateGpuValues(gpu) {
+		const elements = document.querySelectorAll('[data-gpu-value]')
+		elements.forEach((el) => {
+			const field = el.getAttribute('data-gpu-value')
+			if (field && gpu[field] !== undefined) {
+				el.textContent = gpu[field].toString()
+			}
+		})
+
+		// Update dynamic math if the function exists
+		if (window.updateDynamicMath) {
+			window.updateDynamicMath(gpu)
+		}
+	}
+
+	document.addEventListener('DOMContentLoaded', () => {
+		const selectElement = document.getElementById('gpu-select') as HTMLSelectElement
+		const tflopsElement = document.getElementById('tflops-value')
+		const bandwidthElement = document.getElementById('bandwidth-value')
+		const memoryElement = document.getElementById('memory-value')
+		const canvas = document.getElementById('gpu-chart') as HTMLCanvasElement
+
+		// Initial chart draw
+		if (canvas) {
+			createChart(canvas, selectedIndex)
+		}
+
+		// Initialize all data-gpu-value elements with initial GPU
+		updateGpuValues(gpus[selectedIndex])
+
+		if (selectElement) {
+			selectElement.addEventListener('change', (e) => {
+				const index = parseInt((e.target as HTMLSelectElement).value)
+				selectedIndex = index
+				const gpu = gpus[index]
+
+				if (tflopsElement) tflopsElement.textContent = gpu.tflops.toString()
+				if (bandwidthElement) bandwidthElement.textContent = `${gpu.bandwidth} TB/s`
+				if (memoryElement) memoryElement.textContent = `${gpu.memory} GB`
+
+				// Update all data-gpu-value elements in the page
+				updateGpuValues(gpu)
+
+				if (canvas) {
+					createChart(canvas, index)
+				}
+			})
+		}
+	})
+</script>
+
+<style>
+	.gpu-selector-wrapper {
+		display: contents;
+	}
+
+	/* Position in right gutter like sidenotes */
+	.gpu-selector-gutter {
+		float: right;
+		clear: right;
+		margin-right: -32%;
+		width: 30%;
+		margin-top: 0.3rem;
+		margin-bottom: 1rem;
+		font-size: 0.875rem;
+		line-height: 1.3;
+		position: relative;
+		font-family: var(--font-sans);
+	}
+
+	.chart-container {
+		margin: 1.5rem 0;
+	}
+
+	.gpu-dropdown {
+		width: 100%;
+		padding: 0.5rem;
+		font-size: 0.875rem;
+		border: 1px solid var(--color-foreground, #0c0c0c);
+		border-radius: 0.375rem;
+		background: var(--color-background, #ffffff);
+		color: var(--color-foreground, #0c0c0c);
+		cursor: pointer;
+		margin-bottom: 1rem;
+		font-family: var(--font-sans);
+	}
+
+	.gpu-dropdown:focus {
+		outline: 2px solid var(--color-primary, #0784b5);
+		outline-offset: 2px;
+	}
+
+	.gpu-specs {
+		display: grid;
+		gap: 0.5rem;
+		font-size: 0.875rem;
+	}
+
+	.spec-item {
+		display: flex;
+		justify-content: space-between;
+		padding: 0.25rem 0;
+	}
+
+	.spec-label {
+		font-weight: 500;
+		color: var(--color-foreground, #0c0c0c);
+		opacity: 0.7;
+	}
+
+	.spec-value {
+		font-weight: 600;
+		color: var(--color-foreground, #0c0c0c);
+		font-variant-numeric: tabular-nums;
+	}
+
+	#gpu-chart {
+		max-width: 100%;
+		height: auto;
+	}
+
+	/* Three-column layout: position in dedicated right column */
+	@media (min-width: 1280px) {
+		.gpu-selector-gutter {
+			margin-right: -17.5rem;
+			width: 15rem;
+		}
+	}
+
+	/* Below xl: show inline like unnumbered sidenotes */
+	@media (max-width: 1279px) {
+		.gpu-selector-gutter {
+			float: none;
+			margin: 1rem 2.5%;
+			width: 95%;
+			padding: 1rem;
+			background: var(--color-background, #ffffff);
+			border-left: 3px solid var(--color-primary, #0784b5);
+			box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+		}
+	}
+
+	@media (prefers-color-scheme: dark) {
+		.gpu-dropdown {
+			background: var(--color-background-dark, #2b2b2b);
+			border-color: var(--color-foreground-dark, #fafafa);
+			color: var(--color-foreground-dark, #fafafa);
+		}
+
+		.spec-label {
+			color: var(--color-foreground-dark, #fafafa);
+		}
+
+		.spec-value {
+			color: var(--color-foreground-dark, #fafafa);
+		}
+
+		@media (max-width: 1279px) {
+			.gpu-selector-gutter {
+				background: var(--color-background-dark, #2b2b2b);
+				border-left-color: var(--color-primary-dark, #9bd4e4);
+			}
+		}
+	}
+</style>

@@ -1,0 +1,122 @@
+---
+// Simple hover card component for showing additional info
+---
+
+<div class="hover-card-trigger">
+  <button class="trigger-btn" aria-label="Show more info">
+    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="6 15 12 9 18 15"></polyline>
+    </svg>
+  </button>
+  <div class="hover-card">
+    <slot />
+  </div>
+</div>
+
+<style>
+  .hover-card-trigger {
+    position: relative;
+    display: inline-block;
+  }
+
+  .trigger-btn {
+    @apply cursor-pointer;
+    background: none;
+    border: none;
+    padding: 0.25rem;
+    color: var(--color-primary);
+    opacity: 0.7;
+    transition: opacity 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .dark .trigger-btn {
+    color: var(--color-primary-dark);
+  }
+
+  .trigger-btn:hover,
+  .trigger-btn:focus {
+    opacity: 1;
+  }
+
+  .hover-card {
+    display: none;
+    position: absolute;
+    z-index: 50;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-bottom: 0.5rem;
+    padding: 1rem;
+    background: var(--color-background);
+    border: 1px solid var(--color-foreground);
+    border-opacity: 0.1;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    width: max-content;
+    max-width: 300px;
+    font-size: 0.875rem;
+    line-height: 1.4;
+    font-family: var(--font-sans);
+  }
+
+  .dark .hover-card {
+    background: var(--color-background-dark);
+    border-color: var(--color-foreground-dark);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+
+  .hover-card::before {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 6px solid transparent;
+    border-top-color: var(--color-foreground);
+    border-top-opacity: 0.1;
+  }
+
+  .hover-card-trigger:hover .hover-card,
+  .trigger-btn:focus + .hover-card {
+    display: block;
+  }
+
+  /* On touch devices, show on click */
+  @media (hover: none) {
+    .hover-card.active {
+      display: block;
+    }
+  }
+</style>
+
+<script>
+  // Handle touch devices - toggle on tap
+  document.querySelectorAll('.trigger-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const card = btn.nextElementSibling as HTMLElement;
+
+      // Close all other cards
+      document.querySelectorAll('.hover-card.active').forEach(other => {
+        if (other !== card) {
+          other.classList.remove('active');
+        }
+      });
+
+      card?.classList.toggle('active');
+    });
+  });
+
+  // Close cards when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!(e.target as HTMLElement).closest('.hover-card-trigger')) {
+      document.querySelectorAll('.hover-card.active').forEach(card => {
+        card.classList.remove('active');
+      });
+    }
+  });
+</script>

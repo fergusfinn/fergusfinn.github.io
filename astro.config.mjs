@@ -4,6 +4,7 @@ import mdx from '@astrojs/mdx'
 import sitemap from '@astrojs/sitemap'
 import partytown from '@astrojs/partytown'
 import icon from 'astro-icon'
+import preact from '@astrojs/preact'
 import rehypeFigureTitle from 'rehype-figure-title'
 import { rehypeAccessibleEmojis } from 'rehype-accessible-emojis'
 import { remarkReadingTime } from './src/plugins/remark-reading-time.mjs'
@@ -20,6 +21,7 @@ export default defineConfig({
     mdx(),
     sitemap(),
     icon(),
+    preact(),
     partytown({
       config: {
         forward: ['dataLayer.push'],
@@ -28,6 +30,9 @@ export default defineConfig({
   ],
   vite: {
     plugins: [tailwindcss()],
+    server: {
+      allowedHosts: ['gotenks'],
+    },
   },
   markdown: {
     remarkPlugins: [remarkReadingTime, remarkModifiedTime, remarkMath],

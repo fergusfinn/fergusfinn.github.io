@@ -1,0 +1,196 @@
+---
+title: 'Inference Arithmetic'
+description: |
+  Copying my favourite inference blog post
+pubDate: 'Oct 9 2025'
+slug: 9181a0aa-7c3a-4d79-851f-031a9a1135a7
+index: false
+---
+
+import Sidenote from '../../components/Sidenote.astro'
+import ConfigTable from '../../components/inference/ConfigTable.tsx'
+import GPUSpecsTable from '../../components/inference/GPUSpecsTable.tsx'
+import ModelParamsTable from '../../components/inference/ModelParamsTable.tsx'
+import ComputeBoundThreshold from '../../components/inference/ComputeBoundThreshold.tsx'
+import PrefillCalculation from '../../components/inference/PrefillCalculation.tsx'
+import DecodeCalculation from '../../components/inference/DecodeCalculation.tsx'
+import LatencyCalculation from '../../components/inference/LatencyCalculation.tsx'
+import ThroughputCalculation from '../../components/inference/ThroughputCalculation.tsx'
+import ChunkedPrefillingCalculation from '../../components/inference/ChunkedPrefillingCalculation.tsx'
+
+How fast can an LLM go?
+
+Lets set out some assumptions.
+
+Semianalysis did some great benchmarks
+[here](https://inferencemax.semianalysis.com/), which give us some data to
+compare to.
+
+<Sidenote unnumbered>
+ <ModelParamsTable client:load />
+</Sidenote>
+
+Lets look at the configuration for one model: Llama-3-70b. The vLLM config
+(supplied by NVIDIA, so presumably as good as it gets) is
+[here](https://github.com/InferenceMAX/InferenceMAX/blob/main/benchmarks/70b_fp8_h100_docker.sh).
+Tensor parallelism, model, and request parallelism<Sidenote> The maximum number
+of sequences the vLLM instance will work on at once, `CONC` </Sidenote> are
+supplied as environment variables. `max-num-batched-tokens` is hardcoded to
+`8192` <Sidenote> `max-num-batched-tokens` is the maximum number of tokens that
+can be inferenced in the batch at once </Sidenote> , and `max-seq-len` to `10240`.
+
+On the client side, [here](https://github.com/InferenceMAX/InferenceMAX/blob/main/runners/launch_h100-cr.sh),
+we use an infinite request rate<Sidenote>Obviously not infinite, just as fast
+as we can</Sidenote>, with input length 1024, and output length
+1024<Sidenote>This covers one benchmark configurartion, there's also 8k-1k and
+1k-8k</Sidenote>. The client's max concurrency is set to match the
+server's<Sidenote>The total number of requests is set to the concurrency rate
+multiplied by 10.</Sidenote>
+
+Pick a configuration from the selector on the left to change the values throughout this article.
+
+<div class="xl:hidden">
+**Configuration**
+<ConfigTable client:load />
+
+</div>
+
+<Sidenote unnumbered>
+ Why do NVIDIA still do TFLOPs with sparsity? Is someone using this? Is
+ everyone just going to be dividing their numbers by 2 from now until forever?
+</Sidenote>
+
+<GPUSpecsTable client:load />
+
+## Working it through
+
+Lets start by counting, both operations and memory.
+
+Transformers have a lot of different operations in them: softmax, RMSNorm,
+matrix multiplications, biases, attention, SiLU, etc. etc. But the good news for doing
+stuff with rules of thumb is that almost none of them matter. Matrix
+multiplications $(F, D) \times (D, B)$ take a number of FLOPS $O(2 BDF)$, and
+require us to transfer $O(2BD + 2DF + 2BF)$ values from HBM to & from the
+compute units. This scaling dominates everything else (softmaxes, norms, etc.
+are all linear).
+
+Since almost all the models the parameters are in the matmuls, and the number
+of FLOPS for an individual matmul is $2 \times \# \mathrm{parameters}$, then we
+can get the total FLOPS for a forward pass through the transformer from just $2
+\cdot P$, where $P$ is the total number of parameters. Read the article
+[here](https://kipp.ly/transformer-inference-arithmetic/#flops-counting)<Sidenote>The
+calculation in that article is for various 2022 era transformers, but LLama-3
+isn't all that different. The only meaningful change is GQA, but that doesn't
+change the formula</Sidenote> to see this worked out.
+
+There are two meaningful bottlenecks that well-optimized GPU software should
+hit: we can be **memory bandwidth bound**, or we can be **compute bound**. GPUs
+at the highest level do just two things - transfer data to compute units, and
+do computation on that data. Since the two can happen at the same time, we only
+need to care about the longer of the two. Which one we hit depends on our
+workload.
+
+Which bucket does transformer inference fall into? Well, it depends. For a
+single $(F, D) \times (D, B)$ matmul to be compute bound, we need the
+arithmetic intensity to exceed the accelerator's compute to bandwidth ratio:
+
+<Sidenote unnumbered>
+ Note: $B$ here is doing double duty in this article - below its the batch size
+ passing through the transformer (i.e. number of sequences), here its the
+ number of tokens passing through the matmul. Also, the approximation comes
+ from $D \gg B$.
+</Sidenote>
+
+$$
+\frac{2BDF}{2BD + 2DF + 2BF} \approx B \geq \frac{\text{accelerator compute}}{\text{accelerator bandwidth}}
+$$
+
+So, we get our first result, the threshold number of tokens at which
+transformer inference becomes completely compute bound:
+
+<ComputeBoundThreshold client:load />
+
+Try changing the accelerator to see how this threshold changes.
+
+### Prefill
+
+Transformer inference has two phases: prefill, where we process the input
+prompt, and then decode, where we generate output tokens one at a time.
+Prefilling happens in parallel across all the input tokens. For all the
+configurations (change the sequence length selector and see), prefilling is
+compute bound, even without batching across multiple requests.
+
+Compute bound means that we're bounded by the FLOP/s of the accelerator: i.e.
+its calculating just as hard as it can.
+
+We worked out the FLOPS in a transformer forward pass above: its $2BP$, for a
+model of size $P$, and batch size $B$. So, given the FLOP/s of the accelerator,
+we can figure how long prefill should take for a single sequence: <Sidenote> Since we're compute bound, computing for $N$ sequences just means multiplying this number by $N$.</Sidenote>
+
+<PrefillCalculation client:load />
+
+### Decode
+
+What about decode? Since decode deals with 1 token at a time per sequence, if
+the batch size is below the compute bound threshold, we will be memory
+bandwidth bound.
+
+Bandwidth bound means our compute units are starved of work, and we're spending
+more time transferring data than computing on it. If we're memory bandwidth
+bound, then, instead of comparing FLOPs, we need to compare the memory
+transfers to the accelerator memory bandwidth.
+
+There are two things we need to transfer for each decode step: the weights and
+the KV cache. For each token, we store both a key and value vector for each
+layer. The sequences run from ISL to ISL+OSL tokens, so we'll assume that the
+average sequence length is in the middle.
+
+<DecodeCalculation client:load />
+
+<Sidenote unnumbered>
+ Note the memory bandwidth is multiplied by the tensor parallelism factor
+</Sidenote>
+
+## Results
+
+### End to End latency
+
+The fastest end-to-end latency that's possible for any single request is the prefill time plus
+the decode time multiplied by the number of output tokens:
+
+<LatencyCalculation client:load />
+
+### Throughput
+
+To calculate throughput, we need to account for both prefill and decode phases. The calculation depends on whether we use sequential scheduling (all prefills, then all decodes) or chunked prefilling (mixing prefills and decodes in the same batch). Toggle between the two modes to see the difference:
+
+<ThroughputCalculation client:load />
+
+With chunked prefilling enabled, prefills can be overlapped with decode work, potentially eliminating prefill overhead entirely. See the appendix below for details on how this works.
+
+---
+
+## Appendix: Chunked Prefilling
+
+vLLM's default scheduler (as of v0.10.0) uses **chunked prefilling**. The idea
+is that prefills and decodes have complementary resource usage: prefills are
+compute bound (wasting memory bandwidth), while decodes are memory bandwidth
+bound (wasting compute). By mixing them in the same batch, we can increase
+utilization. To do this, we need to write kernels that can handle both at the
+same time, but kindly somebody did
+[it](https://github.com/flashinfer-ai/flashinfer).
+
+The scheduler works as follows: at each step, we have a token budget
+(`max_num_batched_tokens`). Ongoing decodes take priority, using 1 token per
+sequence. Any remaining budget is filled with prefill tokens from incoming
+requests. If a prefill is too large to fit entirely, it gets split into chunks
+that are processed across multiple steps.
+
+In steady state, we have all the concurrent users continuously decoding. When a
+sequence completes, a new request will arrive to take its place. That new
+request will be prefilled (potentially in chunks) alongside the ongoing decodes.
+
+If the incoming requests spread out (they will naturally spread out, under
+chunked prefilling), and the number of concurrent users is sufficiently low (or
+the number of output tokens per request is sufficiently high), then the chunked
+prefills can be completely overlapped with the decodes.

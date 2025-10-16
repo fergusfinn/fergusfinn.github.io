@@ -26,23 +26,32 @@ const {
 
 import BaseLayout from './BaseLayout.astro'
 import { Icon } from 'astro-icon/components'
+import StickyConfigSidebar from '../components/inference/StickyConfigSidebar.astro'
 
 const lastModified = dayjs(remarkPluginFrontmatter.lastModified)
 	.utc()
 	.format('D MMM YYYY')
+
+// Show config sidebar only for inference-arithmetic post
+const showConfigSidebar = slug === 'inference-arithmetic'
 ---
 
 <BaseLayout title={title} description={description}>
 	<main>
 		<article>
 			<div
-				class="app-container flex flex-col xl:flex-row gap-4 xl:gap-6 py-24 relative"
+				class="app-container flex flex-col xl:flex-row gap-4 xl:gap-8 py-24 relative"
 			>
 				<!-- Left: Table of Contents -->
 				<div class="xl:w-48 flex-shrink-0 relative hidden xl:block">
 					<div class="sticky top-0 xl:top-8">
 						<TableOfContents headings={headings} />
 					</div>
+					{showConfigSidebar && (
+						<div class="sticky top-96">
+							<StickyConfigSidebar />
+						</div>
+					)}
 				</div>
 
 				<!-- Center: Main Content -->
