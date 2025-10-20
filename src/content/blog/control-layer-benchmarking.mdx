@@ -11,27 +11,26 @@ import HoverCard from '../../components/HoverCard.astro'
 
 Benchmarking is hard.
 
-We believe our Control Layer
+We think our Control Layer
 ([dwctl](https://github.com/doublewordai/control-layer)) is the fastest AI
 gateway around. We believe this because its written in Rust<Sidenote>And
 therefore blazing fast</Sidenote>, and because we thought about performance a
 lot while we were building it. We put it in production in our self-hosted
 inference stack, and we knew that it was fast because we didn't notice it.
 
-But we're open sourcing it. And once its open source, it can be used in lots of
-different places, with lots of different performance profiles. And so, to prove
-to ourselves that it will be fast everywhere, we have to do benchmarking.
-
-But benchmarking is hard. The only realistic benchmarks are built by you, the
-user, since only you know what your application looks like<Sidenote>Every
-highly technical business for whom performance is a proof point eventually
-releases a weary blog post talking about how performance is multifaceted and
-can't be captured by simple benchmarks. See
+But we're open sourcing it. And once its out there, it can be used in lots of
+different places, in lots of different ways. And so, to prove that it will be
+fast everywhere, we have to do benchmarking. <Sidenote> The usual caveats about general case benchmarks apply: the only realistic
+benchmarks are built by you, the user, since only you know what your
+application looks like. Every highly technical business for whom performance
+is a proof point eventually releases a weary blog post talking about how
+performance is multifaceted and can't be captured by simple benchmarks. See
 [here](https://planetscale.com/benchmarks),
 [here](https://motherduck.com/blog/perf-is-not-enough/),
 [here](https://hannes.muehleisen.org/publications/DBTEST2018-performance-testing.pdf),
 [here](https://blog.tjll.net/reverse-proxy-hot-dog-eating-contest-caddy-vs-nginx/)
-for interesting content.</Sidenote>. Still, we have to try.
+for interesting content. </Sidenote>
+.
 
 <Sidenote unnumbered>
  Fig. 1: How this article is going to go. From
@@ -81,7 +80,6 @@ Here's a list of options:
 | ------------------------------------------------------ | ---- | -------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [LiteLLM](https://www.litellm.ai/)                     | ✓    | ✓        | ✓    | Probably the first to outline exactly this product (or at least the first I heard of). Written in python. [Loads](https://docs.litellm.ai/docs/) of features.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | [Bifrost](https://github.com/maximhq/bifrost)          | ✓    | ✓        | ✓    | Claims to be the [fastest](https://github.com/maximhq/bifrost) LLM gateway. Nice UI. Written in go.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| [Helicone](https://github.com/Helicone/helicone)       | ✓    | ✓        | ✓    | TODO: benchmark this one                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | [Tensorzero](https://github.com/tensorzero/tensorzero) | ✗    | ✓        | ✓    | No authentication story. <HoverCard>Super interesting project, with a lot to offer on the experimentation & evaluation side. Also written in Rust, and with strong benchmarks. I'd like to benchmark it anyway, but auth is a hard requirement for us, and auth vs. no auth is apples to oranges.</HoverCard>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | [Kong](https://portkey.ai/)                            | ✓    | ✓        | ✗    | Couldn't get it running <HoverCard>A product from a company that built enterprise gateways back before AI was all the rage. Getting their core gateway product up and running is really easy, and from what I know of it in that context, its performant and nice to use. But I couldn't get the AI offering working in a reasonable amount of time In order to make it an AI gateway I have to run some sort of shell piped bash script? And then that will transform my running regular Kong gateway into an AI gateway? Either way i tried it and it didn't work. I'd like to come back to this one though. </HoverCard>                                                                                                                                                                                                                                                                                                              |
 | [Portkey](https://portkey.ai/)                         | ✓    | ✗        | ✗    | The hosted offering looks really [nice](https://portkey.ai/). But their OSS version is missing lots of features <HoverCard> They make a very visible claim that their product is open source, and as far as I can tell that's not accurate. They have an open source [offering](https://github.com/portkey-ai/gateway), but if you actually try to use it, you find that their [core features](https://github.com/portkey-ai/gateway?tab=readme-ov-file#core-features) list is a list of features that are available in their hosted product. And all the documentation links are to that product. From what i can tell from trying to use the OSS version, I can't actually use authentication. I gave them a cross for "easy to use" since it took me more than 30 minutes of looking to figure out that I couldn't do auth in the OSS product, which was very frustrating. If i'm wrong here, i'm happy to be corrected. </HoverCard> |
