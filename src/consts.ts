@@ -20,6 +20,6 @@ export const WebsiteLinks = [
   },
   {
     name: 'About',
-    url: 'about',
+    url: '/about',
   },
 ]
