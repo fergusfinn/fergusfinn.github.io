@@ -12,6 +12,7 @@ type Props = CollectionEntry<'blog'>['data'] & {
 	headings: MarkdownHeading[]
 	slug: string
 	remarkPluginFrontmatter: Record<string, string>
+	showConfigSidebar?: boolean
 }
 
 const {
@@ -22,18 +23,16 @@ const {
 	headings,
 	slug,
 	remarkPluginFrontmatter,
+	showConfigSidebar = false,
 } = Astro.props
 
 import BaseLayout from './BaseLayout.astro'
 import { Icon } from 'astro-icon/components'
-import StickyConfigSidebar from '../components/inference/StickyConfigSidebar.astro'
+import ConfigTable from '../components/inference/ConfigTable.tsx'
 
 const lastModified = dayjs(remarkPluginFrontmatter.lastModified)
 	.utc()
 	.format('D MMM YYYY')
-
-// Show config sidebar only for inference-arithmetic post
-const showConfigSidebar = slug === 'inference-arithmetic'
 ---
 
 <BaseLayout title={title} description={description}>
@@ -49,7 +48,10 @@ const showConfigSidebar = slug === 'inference-arithmetic'
 					</div>
 					{showConfigSidebar && (
 						<div class="sticky top-96">
-							<StickyConfigSidebar />
+							<div class="sidebar-content">
+								<h3 class="sidebar-title">Configuration</h3>
+								<ConfigTable compact={true} client:load />
+							</div>
 						</div>
 					)}
 				</div>
@@ -171,4 +173,33 @@ const showConfigSidebar = slug === 'inference-arithmetic'
 			initSidenotes()
 		}
 	</script>
+
+	<style>
+		.sidebar-content {
+			background: white;
+			border: 1px solid #e5e7eb;
+			border-radius: 0.5rem;
+			padding: 1rem;
+			box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+			margin-left: -1rem;
+			width: calc(100% + 1rem);
+		}
+
+		:global(.dark) .sidebar-content {
+			background: #1f2937;
+			border-color: #374151;
+		}
+
+		.sidebar-title {
+			font-size: 1rem;
+			font-weight: 600;
+			margin: 0 0 1rem 0;
+			padding-bottom: 0.5rem;
+			border-bottom: 1px solid #e5e7eb;
+		}
+
+		:global(.dark) .sidebar-title {
+			border-color: #374151;
+		}
+	</style>
 </BaseLayout>

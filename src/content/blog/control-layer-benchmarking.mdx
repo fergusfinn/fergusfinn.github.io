@@ -1,10 +1,9 @@
 ---
-title: 'Waycast benchmarking'
+title: 'Control Layer Benchmarking'
 description: |
-  Benchmarking waycast
+  Benchmarking the Doubleword Control Layer
 pubDate: 'Oct 16 2025'
-slug: 838afc6f-e140-4800-8562-389f3574f939
-index: false
+slug: control-layer-benchmarking
 ---
 
 import Sidenote from '../../components/Sidenote.astro'
@@ -12,11 +11,12 @@ import HoverCard from '../../components/HoverCard.astro'
 
 Benchmarking is hard.
 
-We believe our `waycast` gateway is the fastest AI gateway around. We believe
-this because its written in Rust<Sidenote>And therefore blazing
-fast</Sidenote>, and because we thought about performance a lot while we were
-building it. We put it in production in our self-hosted inference stack, and we
-knew that it was fast because we didn't notice it.
+We believe our Control Layer
+([dwctl](https://github.com/doublewordai/control-layer)) is the fastest AI
+gateway around. We believe this because its written in Rust<Sidenote>And
+therefore blazing fast</Sidenote>, and because we thought about performance a
+lot while we were building it. We put it in production in our self-hosted
+inference stack, and we knew that it was fast because we didn't notice it.
 
 But we're open sourcing it. And once its open source, it can be used in lots of
 different places, with lots of different performance profiles. And so, to prove
@@ -42,7 +42,7 @@ for interesting content.</Sidenote>. Still, we have to try.
 
 ## What are we benchmarking
 
-`waycast` is an "AI Gateway". For the purposes of this discussion, this is
+`dwctl` is an "AI Gateway". For the purposes of this discussion, this is
 basically a [reverse
 proxy](https://www.cloudflare.com/en-gb/learning/cdn/glossary/reverse-proxy/)
 that is specialised to openAI compatible requests. From our perspective, there
@@ -77,14 +77,14 @@ Here's a list of options:
  [Vercel AI gateway](https://vercel.com/docs/ai-gateway){' '}
 </Sidenote>
 
-| Who                                                    | Auth | Hostable | Easy | Vibes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ------------------------------------------------------ | ---- | -------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [LiteLLM](https://www.litellm.ai/)                     | ✓    | ✓        | ✓    | Probably the first to outline exactly this product (or at least the first I heard of). Written in python. [Loads](https://docs.litellm.ai/docs/) of features.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| [Bifrost](https://github.com/maximhq/bifrost)          | ✓    | ✓        | ✓    | Claims to be the [fastest](https://github.com/maximhq/bifrost) LLM gateway. Nice UI. Written in go.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| [Helicone](https://github.com/Helicone/helicone)       | ✓    | ✓        | ✓    | TODO: benchmark this one                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| [Tensorzero](https://github.com/tensorzero/tensorzero) | ✗    | ✓        | ✓    | No authentication story. <HoverCard>Super interesting project, with a lot to offer on the experimentation & evaluation side. Also written in Rust, and with strong benchmarks. I'd like to benchmark it anyway, but auth is a hard requirement for us, and auth vs. no auth is apples to oranges.</HoverCard>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| [Kong](https://portkey.ai/)                            | ✓    | ✓        | ✗    | Couldn't get it running <HoverCard>A product from a company that built enterprise gateways back before AI was all the rage. Getting their core gateway product up and running is really easy, and from what I know of it in that context, its performant and nice to use. But I couldn't get the AI offering working in a reasonable amount of time In order to make it an AI gateway I have to run some sort of shell piped bash script? And then that will transform my running regular Kong gateway into an AI gateway? Either way i tried it and it didn't work. I'd like to come back to this one though. </HoverCard>                                                                                                                                                                                                                                                                                                                   |
-| [Portkey](https://portkey.ai/)                         | ✓    | ✗        | ✗    | The hosted offering looks really [nice](https://portkey.ai/). But their OSS version is missing lots of features [^3] <HoverCard> They make a very visible claim that their product is open source, and as far as I can tell that's not accurate. They have an open source [offering](https://github.com/portkey-ai/gateway), but if you actually try to use it, you find that their [core features](https://github.com/portkey-ai/gateway?tab=readme-ov-file#core-features) list is a list of features that are available in their hosted product. And all the documentation links are to that product. From what i can tell from trying to use the OSS version, I can't actually use authentication. I gave them a cross for "easy to use" since it took me more than 30 minutes of looking to figure out that I couldn't do auth in the OSS product, which was very frustrating. If i'm wrong here, i'm happy to be corrected. </HoverCard> |
+| Who                                                    | Auth | Hostable | Easy | Vibes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------ | ---- | -------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [LiteLLM](https://www.litellm.ai/)                     | ✓    | ✓        | ✓    | Probably the first to outline exactly this product (or at least the first I heard of). Written in python. [Loads](https://docs.litellm.ai/docs/) of features.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| [Bifrost](https://github.com/maximhq/bifrost)          | ✓    | ✓        | ✓    | Claims to be the [fastest](https://github.com/maximhq/bifrost) LLM gateway. Nice UI. Written in go.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| [Helicone](https://github.com/Helicone/helicone)       | ✓    | ✓        | ✓    | TODO: benchmark this one                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| [Tensorzero](https://github.com/tensorzero/tensorzero) | ✗    | ✓        | ✓    | No authentication story. <HoverCard>Super interesting project, with a lot to offer on the experimentation & evaluation side. Also written in Rust, and with strong benchmarks. I'd like to benchmark it anyway, but auth is a hard requirement for us, and auth vs. no auth is apples to oranges.</HoverCard>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| [Kong](https://portkey.ai/)                            | ✓    | ✓        | ✗    | Couldn't get it running <HoverCard>A product from a company that built enterprise gateways back before AI was all the rage. Getting their core gateway product up and running is really easy, and from what I know of it in that context, its performant and nice to use. But I couldn't get the AI offering working in a reasonable amount of time In order to make it an AI gateway I have to run some sort of shell piped bash script? And then that will transform my running regular Kong gateway into an AI gateway? Either way i tried it and it didn't work. I'd like to come back to this one though. </HoverCard>                                                                                                                                                                                                                                                                                                              |
+| [Portkey](https://portkey.ai/)                         | ✓    | ✗        | ✗    | The hosted offering looks really [nice](https://portkey.ai/). But their OSS version is missing lots of features <HoverCard> They make a very visible claim that their product is open source, and as far as I can tell that's not accurate. They have an open source [offering](https://github.com/portkey-ai/gateway), but if you actually try to use it, you find that their [core features](https://github.com/portkey-ai/gateway?tab=readme-ov-file#core-features) list is a list of features that are available in their hosted product. And all the documentation links are to that product. From what i can tell from trying to use the OSS version, I can't actually use authentication. I gave them a cross for "easy to use" since it took me more than 30 minutes of looking to figure out that I couldn't do auth in the OSS product, which was very frustrating. If i'm wrong here, i'm happy to be corrected. </HoverCard> |
 
 These are all the offerings that I could find that met our requirements (and
 lots that don't). If you know of another that i've missed out, let me know
@@ -94,7 +94,7 @@ So the candidates are:
 
 1. **[LiteLLM](https://litellm.ai)**: Python, feature complete
 2. **[Bifrost](https://https://github.com/maximhq/bifrost)**: Go, more minimal
-3. **[Waycast](https://github.com/doublewordai/waycast)**: Rust, even more minimal (for now).
+3. **[dwctl](https://github.com/doublewordai/dwctl)**: Rust, even more minimal (for now).
 
 ## How to benchmark a proxy
 
@@ -202,13 +202,13 @@ The baseline is the performance of the load being driven directly at the sink,
 so shows the overhead of the load generator itself, the time spent in the sink
 that's not accounted for in the wait time, and the network overhead <Sidenote>In principle not all the overhead, since there's a network hop missing.</Sidenote>
 
-We can see that, at 100 concurrent users, waycast keeps up very well. The overhead
+We can see that, at 100 concurrent users, dwctl keeps up very well. The overhead
 stays in sight of the baseline, even at higher percentiles. Bifrost adds more
-overhead than waycast but still performs reasonably. LiteLLM on the other hand,
+overhead than dwctl but still performs reasonably. LiteLLM on the other hand,
 falls well behind \- with over a full second of latency being added to the
 median request.
 
-| Metric           | Theoretical | Baseline | waycast    | Bifrost | LiteLLM |
+| Metric           | Theoretical | Baseline | dwctl      | Bifrost | LiteLLM |
 | :--------------- | :---------- | :------- | :--------- | :------ | :------ |
 | Requests/sec     | 200.00      | 197.64   | **179.72** | 154.09  | 59.29   |
 | Avg Latency (ms) | 500         | 504      | **549**    | 603     | 1613    |
@@ -223,7 +223,7 @@ we don't need to wait around. It increases the work the proxy has to do, since
 its being hit from both sides \- responses come back quick, and requests come
 in quick. If you use a lot of fast models, this might be a realistic scenario.
 
-The baseline starts to fall behind the theoretical numbers, and waycast starts
+The baseline starts to fall behind the theoretical numbers, and dwctl starts
 to fall behind the baseline. The latency is still likely imperceptible, even at
 the tail, but not by much, and adding network latency will take it over the
 edge.
@@ -232,7 +232,7 @@ Bifrost starts to struggle significantly at this load level, with much higher
 latency. LiteLLM continues to struggle even more, with a median latency of over
 1.6s.
 
-| Metric           | Theoretical | Baseline | waycast    | Bifrost | LiteLLM |
+| Metric           | Theoretical | Baseline | dwctl      | Bifrost | LiteLLM |
 | :--------------- | :---------- | :------- | :--------- | :------ | :------ |
 | Requests/sec     | 1000.00     | 964.76   | **832.55** | 160.28  | 54.41   |
 | Avg Latency (ms) | 100         | 103      | **113**    | 558     | 1714    |
@@ -245,16 +245,16 @@ latency. LiteLLM continues to struggle even more, with a median latency of over
 Lets try lower load - half the users, and slower LLMs.
 
 At low load, the only effect of the proxy should be a minor increase in
-latency. For both waycast and Bifrost, this is the case \- they're almost
+latency. For both dwctl and Bifrost, this is the case \- they're almost
 indistinguishable from the baseline, with Bifrost performing slightly better on
-throughput and average latency, while waycast is better at P50 and P90. I'd
-suspect we had some random blip here for waycast that's increasing the tail
+throughput and average latency, while dwctl is better at P50 and P90. I'd
+suspect we had some random blip here for dwctl that's increasing the tail
 latency, but I don't want to get into redoing experiments, since it seems like
 an obvious way that bias would slip in.
 
 LiteLLM adds almost 200ms of latency on average, and over 2 seconds at the tail.
 
-| Metric           | Theoretical | Baseline | waycast  | Bifrost   | LiteLLM |
+| Metric           | Theoretical | Baseline | dwctl    | Bifrost   | LiteLLM |
 | :--------------- | :---------- | :------- | :------- | :-------- | :------ |
 | Requests/sec     | 25.00       | 24.96    | 24.78    | **24.80** | 22.47   |
 | Avg Latency (ms) | 2000        | 2002     | 2017     | **2009**  | 2186    |
@@ -266,11 +266,11 @@ LiteLLM adds almost 200ms of latency on average, and over 2 seconds at the tail.
 
 From these simple benchmarks, we can see that:
 
-- **waycast** performs best overall, with the lowest overhead across most
+- **dwctl** performs best overall, with the lowest overhead across most
   scenarios. It keeps up well even under high load (100 concurrent users).
-- **Bifrost** performs well at low load, matching waycast's performance.
+- **Bifrost** performs well at low load, matching dwctl's performance.
   However, it struggles significantly under high load, showing
-  much higher latency than waycast.
+  much higher latency than dwctl.
 - **LiteLLM** struggles to keep up with even moderate load, adding dramatic
   latency across all scenarios. At 100 concurrent users, it adds over 1 second of
   latency to median requests.
@@ -279,9 +279,14 @@ From these simple benchmarks, we can see that:
 
 There's an argument that goes: why do I care if my proxy is fast? It's not the
 slowest part of my system - that's almost certainly the LLM. To which - fair.
-This isn't LLM inference optimization<Sidenote>If you care about that sort of stuff, see [here](https://fergus.finn@github.io/blog/scheduling-in-inference-engines/), [here](http://localhost:4321/blog/llm-guided-scheduling/), [here](http://localhost:4321/blog/spacelike-speculative-decoding/), [here](https://docs.doubleword.ai/conceptual/10-06-2025-bts-2)</Sidenote>, where you're working on systems that are
-painfully slow, and where if they were 10 times faster you could change the
-whole world.
+This isn't LLM inference optimization<Sidenote>If you care about that sort of
+stuff, see
+[here](https://fergusfinn.com/blog/scheduling-in-inference-engines/),
+[here](http://fergusfinn.com/blog/llm-guided-scheduling/),
+[here](http://fergusfinn.com/blog/spacelike-speculative-decoding/),
+[here](https://docs.doubleword.ai/conceptual/10-06-2025-bts-2)</Sidenote>,
+where you're working on systems that are painfully slow, and where if they were
+10 times faster you could change the whole world.
 
 The reason is that performance doesn't only matter when its currently a
 bottleneck. Everything to do with LLMs changes every day. The systems we build
@@ -293,11 +298,11 @@ the table, we'll feel it immediately, and painfully.
 
 Besides, the best possible thing that this part of the stack can do is
 disappear. It's like the referee in a football game - if the viewer notices
-them, then their doing a bad job. If API consumers notice that they're being
+them, then they're doing a bad job. If API consumers notice that they're being
 served behind a reverse proxy, then the proxy is doing a bad job. Even small
 performance improvements can help us to disappear.
 
-If you'd like to get started with waycast, join us on the
-[github](https://github.com/doublewordai/waycast). For issues, with our
+If you'd like to get started with dwctl, join us on the
+[github](https://github.com/doublewordai/dwctl). For issues, with our
 performance or my benchmarking methodology, raise them on the [issues
-page](https://github.com/doublewordai/waycast/issues).
+page](https://github.com/doublewordai/dwctl/issues).
