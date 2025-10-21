@@ -13,6 +13,7 @@ type Props = CollectionEntry<'blog'>['data'] & {
 	slug: string
 	remarkPluginFrontmatter: Record<string, string>
 	showConfigSidebar?: boolean
+	stickyToc?: boolean
 }
 
 const {
@@ -24,11 +25,13 @@ const {
 	slug,
 	remarkPluginFrontmatter,
 	showConfigSidebar = false,
+	stickyToc = true,
 } = Astro.props
 
 import BaseLayout from './BaseLayout.astro'
 import { Icon } from 'astro-icon/components'
 import ConfigTable from '../components/inference/ConfigTable.tsx'
+import ChartControls from '../components/inference/ChartControls.tsx'
 
 const lastModified = dayjs(remarkPluginFrontmatter.lastModified)
 	.utc()
@@ -43,11 +46,11 @@ const lastModified = dayjs(remarkPluginFrontmatter.lastModified)
 			>
 				<!-- Left: Table of Contents -->
 				<div class="xl:w-48 flex-shrink-0 relative hidden xl:block">
-					<div class="sticky top-0 xl:top-8">
+					<div class={stickyToc ? "sticky top-0 xl:top-8" : ""}>
 						<TableOfContents headings={headings} />
 					</div>
 					{showConfigSidebar && (
-						<div class="sticky top-96">
+						<div class="sticky top-20 xl:top-24">
 							<div class="sidebar-content">
 								<h3 class="sidebar-title">Configuration</h3>
 								<ConfigTable compact={true} client:load />

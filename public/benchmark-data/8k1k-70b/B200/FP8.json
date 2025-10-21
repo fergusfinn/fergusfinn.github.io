@@ -1,0 +1,222 @@
+[
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 1,
+    "Conc": 4,
+    "TTFT (ms)": 711.5586,
+    "TPOT (ms)": 18.7689,
+    "E2EL (s)": 17.7437,
+    "TPUT per GPU": 1800.3879
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 1,
+    "Conc": 8,
+    "TTFT (ms)": 660.0762,
+    "TPOT (ms)": 21.5975,
+    "E2EL (s)": 20.7335,
+    "TPUT per GPU": 3127.1379
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 1,
+    "Conc": 16,
+    "TTFT (ms)": 674.3082,
+    "TPOT (ms)": 28.0287,
+    "E2EL (s)": 26.5507,
+    "TPUT per GPU": 4844.203
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 1,
+    "Conc": 32,
+    "TTFT (ms)": 718.8597,
+    "TPOT (ms)": 42.5946,
+    "E2EL (s)": 40.2493,
+    "TPUT per GPU": 6460.293
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 1,
+    "Conc": 64,
+    "TTFT (ms)": 5382.6457,
+    "TPOT (ms)": 70.5308,
+    "E2EL (s)": 71.0719,
+    "TPUT per GPU": 7436.0619
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 2,
+    "Conc": 4,
+    "TTFT (ms)": 412.8469,
+    "TPOT (ms)": 11.8729,
+    "E2EL (s)": 11.1878,
+    "TPUT per GPU": 1424.325
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 2,
+    "Conc": 8,
+    "TTFT (ms)": 410.7906,
+    "TPOT (ms)": 13.5919,
+    "E2EL (s)": 13.0268,
+    "TPUT per GPU": 2482.4156
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 2,
+    "Conc": 16,
+    "TTFT (ms)": 426.1273,
+    "TPOT (ms)": 17.5795,
+    "E2EL (s)": 16.7867,
+    "TPUT per GPU": 3834.1359
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 2,
+    "Conc": 32,
+    "TTFT (ms)": 443.4462,
+    "TPOT (ms)": 25.7962,
+    "E2EL (s)": 24.6834,
+    "TPUT per GPU": 5279.4103
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 2,
+    "Conc": 64,
+    "TTFT (ms)": 487.151,
+    "TPOT (ms)": 43.2746,
+    "E2EL (s)": 40.8343,
+    "TPUT per GPU": 6462.75
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 4,
+    "Conc": 4,
+    "TTFT (ms)": 281.5958,
+    "TPOT (ms)": 9.1677,
+    "E2EL (s)": 8.6069,
+    "TPUT per GPU": 925.2827
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 4,
+    "Conc": 8,
+    "TTFT (ms)": 297.9102,
+    "TPOT (ms)": 9.8043,
+    "E2EL (s)": 9.4291,
+    "TPUT per GPU": 1720.04
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 4,
+    "Conc": 16,
+    "TTFT (ms)": 308.0269,
+    "TPOT (ms)": 12.4351,
+    "E2EL (s)": 11.8503,
+    "TPUT per GPU": 2678.8402
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 4,
+    "Conc": 32,
+    "TTFT (ms)": 343.112,
+    "TPOT (ms)": 18.1736,
+    "E2EL (s)": 17.595,
+    "TPUT per GPU": 3690.8734
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 4,
+    "Conc": 64,
+    "TTFT (ms)": 536.1753,
+    "TPOT (ms)": 29.5218,
+    "E2EL (s)": 28.1135,
+    "TPUT per GPU": 4638.8835
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 8,
+    "Conc": 4,
+    "TTFT (ms)": 231.7631,
+    "TPOT (ms)": 7.673,
+    "E2EL (s)": 7.2033,
+    "TPUT per GPU": 550.7266
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 8,
+    "Conc": 8,
+    "TTFT (ms)": 211.2533,
+    "TPOT (ms)": 7.7668,
+    "E2EL (s)": 7.4679,
+    "TPUT per GPU": 1084.5569
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 8,
+    "Conc": 16,
+    "TTFT (ms)": 211.0107,
+    "TPOT (ms)": 9.6808,
+    "E2EL (s)": 9.2452,
+    "TPUT per GPU": 1703.6359
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 8,
+    "Conc": 32,
+    "TTFT (ms)": 218.8057,
+    "TPOT (ms)": 13.5405,
+    "E2EL (s)": 13.1103,
+    "TPUT per GPU": 2454.4373
+  },
+  {
+    "Hardware": "B200",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 8,
+    "Conc": 64,
+    "TTFT (ms)": 387.5775,
+    "TPOT (ms)": 22.2926,
+    "E2EL (s)": 21.4913,
+    "TPUT per GPU": 3007.3201
+  }
+]

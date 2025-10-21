@@ -1,0 +1,222 @@
+[
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 1,
+    "Conc": 4,
+    "TTFT (ms)": 1525.0952,
+    "TPOT (ms)": 26.2785,
+    "E2EL (s)": 25.1242,
+    "TPUT per GPU": 1266.5454
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 1,
+    "Conc": 8,
+    "TTFT (ms)": 2148.6618,
+    "TPOT (ms)": 37.441,
+    "E2EL (s)": 36.7876,
+    "TPUT per GPU": 1775.895
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 1,
+    "Conc": 16,
+    "TTFT (ms)": 1163.8682,
+    "TPOT (ms)": 43.8397,
+    "E2EL (s)": 41.6808,
+    "TPUT per GPU": 3094.4304
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 1,
+    "Conc": 32,
+    "TTFT (ms)": 1265.5918,
+    "TPOT (ms)": 68.4081,
+    "E2EL (s)": 64.8645,
+    "TPUT per GPU": 4020.3224
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 1,
+    "Conc": 64,
+    "TTFT (ms)": 1430.1134,
+    "TPOT (ms)": 120.4607,
+    "E2EL (s)": 113.4603,
+    "TPUT per GPU": 4677.4271
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 2,
+    "Conc": 4,
+    "TTFT (ms)": 1303.3791,
+    "TPOT (ms)": 17.6571,
+    "E2EL (s)": 16.9833,
+    "TPUT per GPU": 927.3398
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 2,
+    "Conc": 8,
+    "TTFT (ms)": 1578.0923,
+    "TPOT (ms)": 25.4461,
+    "E2EL (s)": 25.0738,
+    "TPUT per GPU": 1296.1078
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 2,
+    "Conc": 16,
+    "TTFT (ms)": 1171.0159,
+    "TPOT (ms)": 34.6668,
+    "E2EL (s)": 33.3509,
+    "TPUT per GPU": 1944.8523
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 2,
+    "Conc": 32,
+    "TTFT (ms)": 1246.7436,
+    "TPOT (ms)": 57.1341,
+    "E2EL (s)": 54.46,
+    "TPUT per GPU": 2407.6086
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 2,
+    "Conc": 64,
+    "TTFT (ms)": 2017.9436,
+    "TPOT (ms)": 103.3959,
+    "E2EL (s)": 97.7643,
+    "TPUT per GPU": 2728.9845
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 4,
+    "Conc": 4,
+    "TTFT (ms)": 702.8368,
+    "TPOT (ms)": 13.7693,
+    "E2EL (s)": 13.1175,
+    "TPUT per GPU": 607.0088
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 4,
+    "Conc": 8,
+    "TTFT (ms)": 862.5247,
+    "TPOT (ms)": 19.2254,
+    "E2EL (s)": 18.5691,
+    "TPUT per GPU": 868.4195
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 4,
+    "Conc": 16,
+    "TTFT (ms)": 639.0816,
+    "TPOT (ms)": 23.6685,
+    "E2EL (s)": 22.4947,
+    "TPUT per GPU": 1429.5607
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 4,
+    "Conc": 32,
+    "TTFT (ms)": 663.0003,
+    "TPOT (ms)": 35.1097,
+    "E2EL (s)": 33.2835,
+    "TPUT per GPU": 1952.3309
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 4,
+    "Conc": 64,
+    "TTFT (ms)": 1145.6053,
+    "TPOT (ms)": 58.8175,
+    "E2EL (s)": 55.5757,
+    "TPUT per GPU": 2387.5038
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 8,
+    "Conc": 4,
+    "TTFT (ms)": 447.5304,
+    "TPOT (ms)": 9.1157,
+    "E2EL (s)": 8.7037,
+    "TPUT per GPU": 459.8439
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 8,
+    "Conc": 8,
+    "TTFT (ms)": 515.7739,
+    "TPOT (ms)": 11.4998,
+    "E2EL (s)": 11.1244,
+    "TPUT per GPU": 726.7868
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 8,
+    "Conc": 16,
+    "TTFT (ms)": 387.9915,
+    "TPOT (ms)": 14.8125,
+    "E2EL (s)": 13.9979,
+    "TPUT per GPU": 1145.0474
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 8,
+    "Conc": 32,
+    "TTFT (ms)": 432.8039,
+    "TPOT (ms)": 22.4993,
+    "E2EL (s)": 21.32,
+    "TPUT per GPU": 1529.7374
+  },
+  {
+    "Hardware": "MI325X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 8,
+    "Conc": 64,
+    "TTFT (ms)": 683.3416,
+    "TPOT (ms)": 35.2318,
+    "E2EL (s)": 33.3065,
+    "TPUT per GPU": 1991.2015
+  }
+]

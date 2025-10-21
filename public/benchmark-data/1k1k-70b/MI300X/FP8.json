@@ -1,0 +1,222 @@
+[
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 1,
+    "Conc": 4,
+    "TTFT (ms)": 206.7253,
+    "TPOT (ms)": 23.8759,
+    "E2EL (s)": 22.3378,
+    "TPUT per GPU": 323.3666
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 1,
+    "Conc": 8,
+    "TTFT (ms)": 259.3784,
+    "TPOT (ms)": 27.5035,
+    "E2EL (s)": 25.9957,
+    "TPUT per GPU": 562.2025
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 1,
+    "Conc": 16,
+    "TTFT (ms)": 275.777,
+    "TPOT (ms)": 28.0848,
+    "E2EL (s)": 25.9631,
+    "TPUT per GPU": 1109.6365
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 1,
+    "Conc": 32,
+    "TTFT (ms)": 321.6651,
+    "TPOT (ms)": 36.1937,
+    "E2EL (s)": 33.5787,
+    "TPUT per GPU": 1710.1695
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 1,
+    "Conc": 64,
+    "TTFT (ms)": 349.2535,
+    "TPOT (ms)": 50.7366,
+    "E2EL (s)": 47.1747,
+    "TPUT per GPU": 2453.9597
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 2,
+    "Conc": 4,
+    "TTFT (ms)": 143.2102,
+    "TPOT (ms)": 15.6104,
+    "E2EL (s)": 14.6135,
+    "TPUT per GPU": 247.2033
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 2,
+    "Conc": 8,
+    "TTFT (ms)": 169.264,
+    "TPOT (ms)": 16.3711,
+    "E2EL (s)": 15.4537,
+    "TPUT per GPU": 471.0609
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 2,
+    "Conc": 16,
+    "TTFT (ms)": 193.7585,
+    "TPOT (ms)": 19.9193,
+    "E2EL (s)": 18.5069,
+    "TPUT per GPU": 782.0979
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 2,
+    "Conc": 32,
+    "TTFT (ms)": 183.5566,
+    "TPOT (ms)": 22.8535,
+    "E2EL (s)": 21.323,
+    "TPUT per GPU": 1349.5865
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 2,
+    "Conc": 64,
+    "TTFT (ms)": 210.8584,
+    "TPOT (ms)": 33.2836,
+    "E2EL (s)": 30.9256,
+    "TPUT per GPU": 1877.0767
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 4,
+    "Conc": 4,
+    "TTFT (ms)": 116.6086,
+    "TPOT (ms)": 10.2826,
+    "E2EL (s)": 9.6466,
+    "TPUT per GPU": 186.8103
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 4,
+    "Conc": 8,
+    "TTFT (ms)": 108.1185,
+    "TPOT (ms)": 11.7997,
+    "E2EL (s)": 11.1743,
+    "TPUT per GPU": 326.6054
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 4,
+    "Conc": 16,
+    "TTFT (ms)": 123.5585,
+    "TPOT (ms)": 13.357,
+    "E2EL (s)": 12.3619,
+    "TPUT per GPU": 583.3911
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 4,
+    "Conc": 32,
+    "TTFT (ms)": 128.0976,
+    "TPOT (ms)": 16.2376,
+    "E2EL (s)": 15.0875,
+    "TPUT per GPU": 951.4414
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 4,
+    "Conc": 64,
+    "TTFT (ms)": 189.0318,
+    "TPOT (ms)": 21.4635,
+    "E2EL (s)": 19.9372,
+    "TPUT per GPU": 1451.352
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 8,
+    "Conc": 4,
+    "TTFT (ms)": 111.8394,
+    "TPOT (ms)": 8.8376,
+    "E2EL (s)": 8.298,
+    "TPUT per GPU": 108.7868
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 8,
+    "Conc": 8,
+    "TTFT (ms)": 112.8498,
+    "TPOT (ms)": 9.6773,
+    "E2EL (s)": 9.1439,
+    "TPUT per GPU": 199.0281
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 8,
+    "Conc": 16,
+    "TTFT (ms)": 115.1702,
+    "TPOT (ms)": 10.5715,
+    "E2EL (s)": 9.7852,
+    "TPUT per GPU": 368.5591
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 8,
+    "Conc": 32,
+    "TTFT (ms)": 120.4144,
+    "TPOT (ms)": 13.17,
+    "E2EL (s)": 12.2361,
+    "TPUT per GPU": 589.0388
+  },
+  {
+    "Hardware": "MI300X",
+    "Framework": "VLLM",
+    "Precision": "FP8",
+    "TP": 8,
+    "Conc": 64,
+    "TTFT (ms)": 130.3234,
+    "TPOT (ms)": 17.7512,
+    "E2EL (s)": 16.4435,
+    "TPUT per GPU": 882.4945
+  }
+]

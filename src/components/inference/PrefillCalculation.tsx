@@ -8,6 +8,7 @@ import {
   formatLargeNumber,
   formatNumber,
 } from '../../stores/inferenceStore'
+import Tooltip from '../Tooltip'
 
 export default function PrefillCalculation() {
   const flops = useStore(prefillFLOPs)
@@ -22,7 +23,7 @@ export default function PrefillCalculation() {
         <div class="leading-relaxed">
           <div class="text-gray-600 dark:text-gray-400 mb-1 text-sm">FLOPs required:</div>
           <div class="text-base" style="font-family: var(--font-math)">
-            {config.inputSeqLength} × 2 × {formatLargeNumber(model.modelSize * 1e9)} = {formatLargeNumber(flops)} FLOPs
+            <Tooltip label="input_seq_len">{config.inputSeqLength}</Tooltip> × <Tooltip label="2 FLOPs per param">2</Tooltip> × <Tooltip label="n_params">{formatLargeNumber(model.modelSize * 1e9)}</Tooltip> = {formatLargeNumber(flops)} FLOPs
           </div>
         </div>
         <div class="leading-relaxed">

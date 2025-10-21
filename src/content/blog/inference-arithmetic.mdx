@@ -1,11 +1,12 @@
 ---
 title: 'Inference Arithmetic'
 description: |
-  Copying my favourite inference blog post
-pubDate: 'Oct 9 2025'
-slug: 9181a0aa-7c3a-4d79-851f-031a9a1135a7
+  Arithmetic on LLM inference performance
+pubDate: 'Oct 22 2025'
+slug: inference-arithmetic
 index: false
 showConfigSidebar: true
+stickyToc: false
 ---
 
 import Sidenote from '../../components/Sidenote.astro'
@@ -18,35 +19,15 @@ import DecodeCalculation from '../../components/inference/DecodeCalculation.tsx'
 import LatencyCalculation from '../../components/inference/LatencyCalculation.tsx'
 import ThroughputCalculation from '../../components/inference/ThroughputCalculation.tsx'
 import ChunkedPrefillingCalculation from '../../components/inference/ChunkedPrefillingCalculation.tsx'
+import NonOverlappedPrefillTokens from '../../components/inference/NonOverlappedPrefillTokens.tsx'
+import BenchmarkComparison from '../../components/inference/BenchmarkComparison.tsx'
+import ThroughputChart from '../../components/inference/ThroughputChart.tsx'
+import LatencyChart from '../../components/inference/LatencyChart.tsx'
 
-How fast can an LLM go?
+How fast can an LLM go? <Sidenote> Great resources for doing this kind of of thinking: [here](https://kipp.ly/transformer-inference-arithmetic/), [here](https://jax-ml.github.io/scaling-book/)</Sidenote>
 
-Lets set out some assumptions.
-
-Semianalysis did some great benchmarks
-[here](https://inferencemax.semianalysis.com/), which give us some data to
-compare to.
-
-<Sidenote unnumbered>
- <ModelParamsTable client:load />
-</Sidenote>
-
-Lets look at the configuration for one model: Llama-3-70b. The vLLM config
-(supplied by NVIDIA, so presumably as good as it gets) is
-[here](https://github.com/InferenceMAX/InferenceMAX/blob/main/benchmarks/70b_fp8_h100_docker.sh).
-Tensor parallelism, model, and request parallelism<Sidenote> The maximum number
-of sequences the vLLM instance will work on at once, `CONC` </Sidenote> are
-supplied as environment variables. `max-num-batched-tokens` is hardcoded to
-`8192` <Sidenote> `max-num-batched-tokens` is the maximum number of tokens that
-can be inferenced in the batch at once </Sidenote> , and `max-seq-len` to `10240`.
-
-On the client side, [here](https://github.com/InferenceMAX/InferenceMAX/blob/main/runners/launch_h100-cr.sh),
-we use an infinite request rate<Sidenote>Obviously not infinite, just as fast
-as we can</Sidenote>, with input length 1024, and output length
-1024<Sidenote>This covers one benchmark configurartion, there's also 8k-1k and
-1k-8k</Sidenote>. The client's max concurrency is set to match the
-server's<Sidenote>The total number of requests is set to the concurrency rate
-multiplied by 10.</Sidenote>
+Reading this [article](https://inferencemax.semianalysis.com/) made me curious as to how good our software is actually getting.
+Lets make some assumptions, and then work it through.
 
 Pick a configuration from the selector on the left to change the values throughout this article.
 
@@ -65,13 +46,13 @@ Pick a configuration from the selector on the left to change the values througho
 
 ## Working it through
 
-Lets start by counting, both operations and memory.
+We need to start counting operations and memory.
 
 Transformers have a lot of different operations in them: softmax, RMSNorm,
 matrix multiplications, biases, attention, SiLU, etc. etc. But the good news for doing
 stuff with rules of thumb is that almost none of them matter. Matrix
 multiplications $(F, D) \times (D, B)$ take a number of FLOPS $O(2 BDF)$, and
-require us to transfer $O(2BD + 2DF + 2BF)$ values from HBM to & from the
+require us to transfer $O(n_{\mathrm{bytes}}(BD + DF + BF))$<Sidenote>$n_{\mathrm{bytes}}$ is the number of bytes per parameter - i.e. $1$ for fp8, $2$ for bf16, ..</Sidenote> values from HBM to & from the
 compute units. This scaling dominates everything else (softmaxes, norms, etc.
 are all linear).
 
@@ -91,10 +72,6 @@ do computation on that data. Since the two can happen at the same time, we only
 need to care about the longer of the two. Which one we hit depends on our
 workload.
 
-Which bucket does transformer inference fall into? Well, it depends. For a
-single $(F, D) \times (D, B)$ matmul to be compute bound, we need the
-arithmetic intensity to exceed the accelerator's compute to bandwidth ratio:
-
 <Sidenote unnumbered>
  Note: $B$ here is doing double duty in this article - below its the batch size
  passing through the transformer (i.e. number of sequences), here its the
@@ -102,12 +79,20 @@ arithmetic intensity to exceed the accelerator's compute to bandwidth ratio:
  from $D \gg B$.
 </Sidenote>
 
+Which bucket does transformer inference fall into? Well, it depends. For a
+single $(F, D) \times (D, B)$ matmul to be compute bound, we need the
+arithmetic intensity to exceed the accelerator's compute to bandwidth ratio:
+
 $$
-\frac{2BDF}{2BD + 2DF + 2BF} \approx B \geq \frac{\text{accelerator compute}}{\text{accelerator bandwidth}}
+\frac{2BDF}{n_\mathrm{bytes}(BD + DF + BF)} \approx \frac{2B}{n_\mathrm{bytes}} \geq \frac{\text{accelerator compute}}{\text{accelerator bandwidth}}
 $$
 
 So, we get our first result, the threshold number of tokens at which
 transformer inference becomes completely compute bound:
+
+<Sidenote unnumbered>
+ Mouse over the underlined numbers to see their source
+</Sidenote>
 
 <ComputeBoundThreshold client:load />
 
@@ -163,11 +148,28 @@ the decode time multiplied by the number of output tokens:
 
 ### Throughput
 
-To calculate throughput, we need to account for both prefill and decode phases. The calculation depends on whether we use sequential scheduling (all prefills, then all decodes) or chunked prefilling (mixing prefills and decodes in the same batch). Toggle between the two modes to see the difference:
+To calculate throughput, we need to account for both prefill and decode phases.
+The calculation depends on how we schedule these phases.
+If we do what was done in popular inference engines in the last few years, we
+run decode until we get new sequences to prefill, and then pause to prefill
+them.
+
+This isn't broadly the case any more. We can do 'chunked prefilling' instead,
+where we have 'heterogeneous' batches, that contain both parts of a prefill,
+alongside a number of ongoing decodes.
+
+This means in principle we can use some of the idle compute during decodes to prefill new
+sequences.
 
 <ThroughputCalculation client:load />
 
-With chunked prefilling enabled, prefills can be overlapped with decode work, potentially eliminating prefill overhead entirely. See the appendix below for details on how this works.
+### Comparison with Benchmarks
+
+<BenchmarkComparison client:load />
+
+<ThroughputChart client:load />
+
+<LatencyChart client:load />
 
 ---
 
@@ -191,7 +193,32 @@ In steady state, we have all the concurrent users continuously decoding. When a
 sequence completes, a new request will arrive to take its place. That new
 request will be prefilled (potentially in chunks) alongside the ongoing decodes.
 
-If the incoming requests spread out (they will naturally spread out, under
-chunked prefilling), and the number of concurrent users is sufficiently low (or
-the number of output tokens per request is sufficiently high), then the chunked
-prefills can be completely overlapped with the decodes.
+In order not to interrupt decodes, we require the chunk size to be equal to:
+
+$$
+\mathrm{Chunk~size} = \mathrm{Compute~bound~threshold}-B
+$$
+
+The condition here is that decode batches are made perfectly compute bound by the
+addition of prefill chunks.
+
+If this is the case, then we can do $OSL$ prefill chunks 'for free' in parallel
+with the decodes. There are:
+
+$$
+B \times (ISL/\mathrm{Chunk~size})
+$$
+
+chunks to process in total. So the number of non-overlapped prefill _tokens_ is:
+
+$$
+\begin{aligned}
+(B \times (ISL/\mathrm{Chunk~size}) - OSL) \times \mathrm{Chunk~size} \\
+B \times ISL - OSL \times \mathrm{Chunk~size} \\
+B \times (ISL + OSL) - OSL \times \mathrm{Compute~bound~threshold}
+\end{aligned}
+$$
+
+For the currently selected configuration:
+
+<NonOverlappedPrefillTokens client:load />

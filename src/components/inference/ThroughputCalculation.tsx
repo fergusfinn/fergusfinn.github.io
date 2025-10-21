@@ -7,10 +7,15 @@ import {
   totalTimeWithMode,
   totalOutputTokens,
   configStore,
+  modelStore,
   chunkedPrefillingEnabled,
-  canOverlapPrefills,
+  nonOverlappedPrefillTokens,
+  nonOverlappedPrefillTime,
+  totalCompute,
   formatNumber,
+  formatLargeNumber,
 } from '../../stores/inferenceStore'
+import Tooltip from '../Tooltip'
 
 export default function ThroughputCalculation() {
   const tput = useStore(throughput)
@@ -20,8 +25,11 @@ export default function ThroughputCalculation() {
   const totalT = useStore(totalTimeWithMode)
   const outputTokens = useStore(totalOutputTokens)
   const config = useStore(configStore)
+  const model = useStore(modelStore)
   const chunkedMode = useStore(chunkedPrefillingEnabled)
-  const canOverlap = useStore(canOverlapPrefills)
+  const nonOverlappedTokens = useStore(nonOverlappedPrefillTokens)
+  const nonOverlappedTime = useStore(nonOverlappedPrefillTime)
+  const compute = useStore(totalCompute)
 
   const toggleChunkedPrefilling = () => {
     chunkedPrefillingEnabled.setKey('enabled', !chunkedMode.enabled)
@@ -54,10 +62,13 @@ export default function ThroughputCalculation() {
           <div class="text-gray-600 dark:text-gray-400 mb-1 text-sm">Total prefill time:</div>
           <div class="text-base" style="font-family: var(--font-math)">
             {chunkedMode.enabled ? (
-              canOverlap ? (
+              nonOverlappedTokens === 0 ? (
                 '0 ms (fully overlapped)'
               ) : (
-                `${formatNumber(totalT - decodeTime)} ms (partial overlap)`
+                <>
+                  <Tooltip label="non_overlapped_tokens">{formatNumber(nonOverlappedTokens, 0)}</Tooltip> tokens × <Tooltip label="2 FLOPs per param">2</Tooltip> × <Tooltip label="n_params">{formatLargeNumber(model.modelSize * 1e9)}</Tooltip> params ÷ <Tooltip label="FLOP/s">{formatLargeNumber(compute)}</Tooltip> FLOP/s ={' '}
+                  {nonOverlappedTime < 0.01 ? formatNumber(nonOverlappedTime, 4) : formatNumber(nonOverlappedTime)} ms
+                </>
               )
             ) : (
               <>

@@ -127,6 +127,20 @@ export default function ConfigTable({ compact = false }: ConfigTableProps) {
               ))}
             </select>
           </div>
+          <div>
+            <label class="block text-xs font-semibold mb-1">Precision</label>
+            <select
+              value={config.bytesPerParameter}
+              onChange={(e) =>
+                updateConfig('bytesPerParameter', parseFloat((e.target as HTMLSelectElement).value))
+              }
+              class="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value={0.5}>FP4</option>
+              <option value={1}>FP8</option>
+              <option value={2}>FP16/BF16</option>
+            </select>
+          </div>
         </>
       ) : (
         <table class="min-w-full border-collapse">
@@ -234,6 +248,22 @@ export default function ConfigTable({ compact = false }: ConfigTableProps) {
                     {spec.name}
                   </option>
                 ))}
+              </select>
+            </td>
+          </tr>
+          <tr class="border-b border-gray-200 dark:border-gray-800">
+            <td class="py-3 px-4">Precision</td>
+            <td class="py-3 px-4">
+              <select
+                value={config.bytesPerParameter}
+                onChange={(e) =>
+                  updateConfig('bytesPerParameter', parseFloat((e.target as HTMLSelectElement).value))
+                }
+                class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value={0.5}>FP4</option>
+                <option value={1}>FP8</option>
+                <option value={2}>FP16/BF16</option>
               </select>
             </td>
           </tr>

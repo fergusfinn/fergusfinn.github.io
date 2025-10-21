@@ -1,0 +1,222 @@
+[
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 1,
+    "Conc": 4,
+    "TTFT (ms)": 857.5284,
+    "TPOT (ms)": 21.2458,
+    "E2EL (s)": 20.0122,
+    "TPUT per GPU": 1595.9925
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 1,
+    "Conc": 8,
+    "TTFT (ms)": 1379.7983,
+    "TPOT (ms)": 28.9899,
+    "E2EL (s)": 28.0526,
+    "TPUT per GPU": 2333.5039
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 1,
+    "Conc": 16,
+    "TTFT (ms)": 511.9178,
+    "TPOT (ms)": 29.4347,
+    "E2EL (s)": 27.5262,
+    "TPUT per GPU": 4644.4239
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 1,
+    "Conc": 32,
+    "TTFT (ms)": 544.8875,
+    "TPOT (ms)": 41.5985,
+    "E2EL (s)": 39.0329,
+    "TPUT per GPU": 6618.3634
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 1,
+    "Conc": 64,
+    "TTFT (ms)": 604.8768,
+    "TPOT (ms)": 65.7534,
+    "E2EL (s)": 61.5158,
+    "TPUT per GPU": 8581.06
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 2,
+    "Conc": 4,
+    "TTFT (ms)": 1309.7148,
+    "TPOT (ms)": 14.5362,
+    "E2EL (s)": 15.1628,
+    "TPUT per GPU": 1055.9522
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 2,
+    "Conc": 8,
+    "TTFT (ms)": 1572.7995,
+    "TPOT (ms)": 22.419,
+    "E2EL (s)": 22.5015,
+    "TPUT per GPU": 1425.0809
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 2,
+    "Conc": 16,
+    "TTFT (ms)": 414.059,
+    "TPOT (ms)": 22.3424,
+    "E2EL (s)": 20.9888,
+    "TPUT per GPU": 3044.4721
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 2,
+    "Conc": 32,
+    "TTFT (ms)": 417.394,
+    "TPOT (ms)": 30.9634,
+    "E2EL (s)": 29.1315,
+    "TPUT per GPU": 4432.5371
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 2,
+    "Conc": 64,
+    "TTFT (ms)": 469.2318,
+    "TPOT (ms)": 49.8719,
+    "E2EL (s)": 46.6967,
+    "TPUT per GPU": 5626.4227
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 4,
+    "Conc": 4,
+    "TTFT (ms)": 719.8175,
+    "TPOT (ms)": 10.6048,
+    "E2EL (s)": 11.1403,
+    "TPUT per GPU": 719.5743
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 4,
+    "Conc": 8,
+    "TTFT (ms)": 841.1218,
+    "TPOT (ms)": 15.0435,
+    "E2EL (s)": 15.0864,
+    "TPUT per GPU": 1060.8036
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 4,
+    "Conc": 16,
+    "TTFT (ms)": 264.0533,
+    "TPOT (ms)": 16.383,
+    "E2EL (s)": 15.3164,
+    "TPUT per GPU": 2084.0079
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 4,
+    "Conc": 32,
+    "TTFT (ms)": 283.6168,
+    "TPOT (ms)": 21.6577,
+    "E2EL (s)": 20.3522,
+    "TPUT per GPU": 3162.8171
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 4,
+    "Conc": 64,
+    "TTFT (ms)": 433.6529,
+    "TPOT (ms)": 31.4648,
+    "E2EL (s)": 29.5446,
+    "TPUT per GPU": 4453.0114
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 8,
+    "Conc": 4,
+    "TTFT (ms)": 485.447,
+    "TPOT (ms)": 9.0909,
+    "E2EL (s)": 9.1634,
+    "TPUT per GPU": 435.1901
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 8,
+    "Conc": 8,
+    "TTFT (ms)": 483.3155,
+    "TPOT (ms)": 11.4709,
+    "E2EL (s)": 11.4586,
+    "TPUT per GPU": 696.699
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 8,
+    "Conc": 16,
+    "TTFT (ms)": 196.4134,
+    "TPOT (ms)": 14.2866,
+    "E2EL (s)": 13.2854,
+    "TPUT per GPU": 1196.6425
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 8,
+    "Conc": 32,
+    "TTFT (ms)": 207.685,
+    "TPOT (ms)": 17.874,
+    "E2EL (s)": 16.7692,
+    "TPUT per GPU": 1912.6904
+  },
+  {
+    "Hardware": "MI355X",
+    "Framework": "VLLM",
+    "Precision": "FP4",
+    "TP": 8,
+    "Conc": 64,
+    "TTFT (ms)": 318.0727,
+    "TPOT (ms)": 24.6233,
+    "E2EL (s)": 23.0617,
+    "TPUT per GPU": 2834.3358
+  }
+]

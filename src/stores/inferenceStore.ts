@@ -3,39 +3,53 @@ import { map, computed } from 'nanostores'
 // Accelerator specifications
 export interface AcceleratorSpec {
   name: string
-  compute: number // TFLOPS in FP8
+  computeFP4: number // TFLOPS in FP4 (2x FP8)
+  computeFP8: number // TFLOPS in FP8
+  computeFP16: number // TFLOPS in FP16 (0.5x FP8)
   memoryBandwidth: number // TB/s
 }
 
 export const ACCELERATORS: Record<string, AcceleratorSpec> = {
   MI355X: {
     name: 'AMD MI355X',
-    compute: 5000, // TFLOPS FP8
+    computeFP4: 10000, // TFLOPS FP4 (2x FP8)
+    computeFP8: 5000, // TFLOPS FP8
+    computeFP16: 2500, // TFLOPS FP16 (0.5x FP8)
     memoryBandwidth: 8.0, // TB/s
   },
   B200: {
     name: 'NVIDIA B200',
-    compute: 4500, // TFLOPS FP8
+    computeFP4: 9000, // TFLOPS FP4 (2x FP8)
+    computeFP8: 4500, // TFLOPS FP8
+    computeFP16: 2250, // TFLOPS FP16 (0.5x FP8)
     memoryBandwidth: 8.0, // TB/s
   },
   MI325X: {
     name: 'AMD MI325X',
-    compute: 2610, // TFLOPS FP8
+    computeFP4: 5220, // TFLOPS FP4 (2x FP8)
+    computeFP8: 2610, // TFLOPS FP8
+    computeFP16: 1305, // TFLOPS FP16 (0.5x FP8)
     memoryBandwidth: 6.0, // TB/s
   },
   MI300X: {
     name: 'AMD MI300X',
-    compute: 2610, // TFLOPS FP8
+    computeFP4: 5220, // TFLOPS FP4 (2x FP8)
+    computeFP8: 2610, // TFLOPS FP8
+    computeFP16: 1305, // TFLOPS FP16 (0.5x FP8)
     memoryBandwidth: 5.3, // TB/s
   },
   H200: {
     name: 'NVIDIA H200',
-    compute: 1979, // TFLOPS FP8
+    computeFP4: 3958, // TFLOPS FP4 (2x FP8)
+    computeFP8: 1979, // TFLOPS FP8
+    computeFP16: 989.5, // TFLOPS FP16 (0.5x FP8)
     memoryBandwidth: 4.8, // TB/s
   },
   H100: {
     name: 'NVIDIA H100',
-    compute: 1979, // TFLOPS FP8
+    computeFP4: 3958, // TFLOPS FP4 (2x FP8)
+    computeFP8: 1979, // TFLOPS FP8
+    computeFP16: 989.5, // TFLOPS FP16 (0.5x FP8)
     memoryBandwidth: 3.35, // TB/s
   },
 }
@@ -47,6 +61,7 @@ export interface ConfigParams {
   inputSeqLength: number
   outputSeqLength: number
   acceleratorType: keyof typeof ACCELERATORS
+  bytesPerParameter: number
 }
 
 export const configStore = map<ConfigParams>({
@@ -55,6 +70,7 @@ export const configStore = map<ConfigParams>({
   inputSeqLength: 1024,
   outputSeqLength: 1024,
   acceleratorType: 'H100',
+  bytesPerParameter: 1, // FP8 = 1 byte, FP16 = 2 bytes, FP32 = 4 bytes
 })
 
 // UI state for chunked prefilling toggle
@@ -91,7 +107,19 @@ export const acceleratorSpec = computed([configStore], (config) => {
 export const totalCompute = computed(
   [configStore, acceleratorSpec],
   (config, spec) => {
-    return config.tensorParallelism * spec.compute * 1e12 // Convert to FLOP/s
+    // Select compute based on bytes per parameter
+    let compute: number
+    if (config.bytesPerParameter === 0.5) {
+      compute = spec.computeFP4
+    } else if (config.bytesPerParameter === 1) {
+      compute = spec.computeFP8
+    } else if (config.bytesPerParameter === 2) {
+      compute = spec.computeFP16
+    } else {
+      // Default to FP8 for any other value
+      compute = spec.computeFP8
+    }
+    return config.tensorParallelism * compute * 1e12 // Convert to FLOP/s
   }
 )
 
@@ -103,10 +131,12 @@ export const totalMemoryBandwidth = computed(
 )
 
 // Compute bound threshold: B >= compute/bandwidth
+// Note: bandwidth is in bytes/s, so we divide by bytesPerParameter to get parameters/s
+// This makes the threshold precision-independent (compute scales with precision, bandwidth/bytesPerParameter scales inversely)
 export const computeBoundThreshold = computed(
-  [totalCompute, totalMemoryBandwidth],
-  (compute, bandwidth) => {
-    return Math.round(compute / bandwidth)
+  [totalCompute, totalMemoryBandwidth, configStore],
+  (compute, bandwidth, config) => {
+    return Math.round(compute / (bandwidth / config.bytesPerParameter) / 2)
   }
 )
 
@@ -126,9 +156,9 @@ export const prefillTime = computed(
 )
 
 // KV cache calculations
-export const kvCachePerToken = computed([modelStore], (model) => {
-  // 2 (key + value) × layers × KV heads × head_dim × bytes_per_element (1 for fp8)
-  return 2 * model.numLayers * model.numKVHeads * model.headDim
+export const kvCachePerToken = computed([modelStore, configStore], (model, config) => {
+  // 2 (key + value) × layers × KV heads × head_dim × bytes_per_element
+  return 2 * model.numLayers * model.numKVHeads * model.headDim * config.bytesPerParameter
 })
 
 export const avgSeqLength = computed([configStore], (config) => {
@@ -147,7 +177,7 @@ export const kvCachePerSequence = computed(
 export const totalBytesPerDecode = computed(
   [modelStore, configStore, kvCachePerSequence],
   (model, config, kvCache) => {
-    const modelWeights = model.modelSize * 1e9 // bytes (fp8)
+    const modelWeights = model.modelSize * 1e9 * config.bytesPerParameter // bytes
     const totalKVCache = config.concurrentUsers * kvCache
     return modelWeights + totalKVCache
   }
@@ -225,22 +255,31 @@ export const canOverlapPrefills = computed(
   }
 )
 
+// Non-overlapped prefill tokens: B × (ISL + OSL) - OSL × Compute_bound_threshold
+export const nonOverlappedPrefillTokens = computed(
+  [configStore, computeBoundThreshold],
+  (config, threshold) => {
+    const B = config.concurrentUsers
+    const ISL = config.inputSeqLength
+    const OSL = config.outputSeqLength
+    return Math.max(0, B * (ISL + OSL) - OSL * threshold)
+  }
+)
+
+// Time for non-overlapped prefill tokens
+export const nonOverlappedPrefillTime = computed(
+  [nonOverlappedPrefillTokens, totalCompute, modelStore],
+  (tokens, compute, model) => {
+    // Time = tokens × 2 FLOPs/param × params ÷ FLOP/s, convert to ms
+    return (tokens * 2 * model.modelSize * 1e9 / compute) * 1000
+  }
+)
+
 // Chunked prefilling: total time calculation
 export const totalTimeChunked = computed(
-  [totalDecodeTime, canOverlapPrefills, totalPrefillTime, availableTokensForPrefill, configStore],
-  (decode, canOverlap, _prefillTime, available, config) => {
-    if (canOverlap) {
-      // All prefills fit within decode capacity
-      return decode
-    } else {
-      // Some prefill work adds overhead
-      const prefillTokensNeeded = config.concurrentUsers * config.inputSeqLength
-      const prefillCapacity = available * config.outputSeqLength
-      const extraPrefillTokens = prefillTokensNeeded - prefillCapacity
-      // Time for extra prefill tokens (compute bound)
-      const extraPrefillTime = (extraPrefillTokens * 2 * config.inputSeqLength) / available // rough approximation
-      return decode + extraPrefillTime
-    }
+  [totalDecodeTime, nonOverlappedPrefillTime],
+  (decode, prefillTime) => {
+    return decode + prefillTime
   }
 )
 
