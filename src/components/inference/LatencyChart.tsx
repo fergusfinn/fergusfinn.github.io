@@ -3,7 +3,6 @@ import { useStore } from '@nanostores/preact'
 import {
   configStore,
   modelStore,
-  e2eLatency,
   ACCELERATORS,
 } from '../../stores/inferenceStore'
 import { chartControlsStore } from './ChartControls'
@@ -35,12 +34,12 @@ type XAxisVariable = 'concurrency' | 'tensorParallelism'
 export default function LatencyChart() {
   const config = useStore(configStore)
   const model = useStore(modelStore)
-  const calcLatency = useStore(e2eLatency)
   const chartControls = useStore(chartControlsStore)
 
   const [benchmarkData, setBenchmarkData] = useState<BenchmarkRow[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [noData, setNoData] = useState(false)
   const chartRef = useRef<HTMLCanvasElement>(null)
   const chartInstance = useRef<Chart | null>(null)
 
@@ -137,21 +136,42 @@ export default function LatencyChart() {
 
   // Create/update chart
   useEffect(() => {
-    if (!benchmarkData || !chartRef.current) return
+    if (!benchmarkData || !chartRef.current) {
+      setNoData(false)
+      return
+    }
 
     // Filter and sort data based on x-axis variable
     let filteredData: BenchmarkRow[]
     if (xAxis === 'concurrency') {
       // Filter for current TP, vary concurrency
       filteredData = benchmarkData.filter(row => row.TP === config.tensorParallelism)
-      if (filteredData.length === 0) return
+      if (filteredData.length === 0) {
+        // Show "No data" message
+        if (chartInstance.current) {
+          chartInstance.current.destroy()
+          chartInstance.current = null
+        }
+        setNoData(true)
+        return
+      }
       filteredData.sort((a, b) => a.Conc - b.Conc)
     } else {
       // Filter for current concurrency, vary TP
       filteredData = benchmarkData.filter(row => row.Conc === config.concurrentUsers)
-      if (filteredData.length === 0) return
+      if (filteredData.length === 0) {
+        // Show "No data" message
+        if (chartInstance.current) {
+          chartInstance.current.destroy()
+          chartInstance.current = null
+        }
+        setNoData(true)
+        return
+      }
       filteredData.sort((a, b) => a.TP - b.TP)
     }
+
+    setNoData(false)
 
     // Destroy existing chart
     if (chartInstance.current) {
@@ -201,7 +221,7 @@ export default function LatencyChart() {
             backgroundColor: 'rgba(234, 88, 12, 0.1)',
             borderWidth: 2,
             borderDash: [5, 5],
-            pointRadius: 0,
+            pointRadius: 4,
             tension: 0,
           },
         ]
@@ -248,7 +268,7 @@ export default function LatencyChart() {
         chartInstance.current.destroy()
       }
     }
-  }, [benchmarkData, config.tensorParallelism, config.concurrentUsers, config.inputSeqLength, config.outputSeqLength, config.bytesPerParameter, config.acceleratorType, model, calcLatency, xAxis, isRelative])
+  }, [benchmarkData, config.tensorParallelism, config.concurrentUsers, config.inputSeqLength, config.outputSeqLength, config.bytesPerParameter, config.acceleratorType, model, xAxis, isRelative])
 
   return (
     <div class="my-6">
@@ -289,8 +309,13 @@ export default function LatencyChart() {
 
         {error && <div class="text-sm text-red-600 dark:text-red-400">{error}</div>}
 
-        {benchmarkData && benchmarkData.length > 0 && (
+        {!loading && !error && (
           <div style="height: 400px; position: relative;">
+            {noData && (
+              <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; background: white; z-index: 10;" class="dark:bg-gray-900">
+                <div class="text-gray-500 dark:text-gray-400">No benchmark data available for this configuration</div>
+              </div>
+            )}
             <canvas ref={chartRef}></canvas>
           </div>
         )}

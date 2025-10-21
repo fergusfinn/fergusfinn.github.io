@@ -176,7 +176,18 @@ theoretical work that the system has to do. In practise, there are overheads:
 
 With that all in mind, how do real world numbers compare?
 
+For the configuration selected on the left, here are the results from the
+[inferenceMAX](https://inferencemax.semianalysis.com/) benchmarks:
+
 <BenchmarkComparison client:load />
+
+You should be able to see that we get pretty close! Most configurations, across
+most accelerators hit roughly 50% of the possible performance. It's worth
+noting that our two numbers should trade off against each other here - its
+impossible, with our assumptions, to achieve minimal latency and maximal
+throughput at the same time.
+
+### Across configurations
 
 <ThroughputChart client:load />
 
