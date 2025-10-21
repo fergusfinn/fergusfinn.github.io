@@ -3,10 +3,8 @@ import { useStore } from '@nanostores/preact'
 import {
   configStore,
   modelStore,
-  totalCompute,
-  totalDecodeTime,
-  computeBoundThreshold,
   chunkedPrefillingEnabled,
+  ACCELERATORS,
 } from '../../stores/inferenceStore'
 import { chartControlsStore } from './ChartControls'
 import { Chart, registerables } from 'chart.js'
@@ -37,40 +35,68 @@ type XAxisVariable = 'concurrency' | 'tensorParallelism'
 export default function ThroughputChart() {
   const config = useStore(configStore)
   const model = useStore(modelStore)
-  const compute = useStore(totalCompute)
-  const decodeTime = useStore(totalDecodeTime)
-  const threshold = useStore(computeBoundThreshold)
   const chunkedMode = useStore(chunkedPrefillingEnabled)
   const chartControls = useStore(chartControlsStore)
 
   const [benchmarkData, setBenchmarkData] = useState<BenchmarkRow[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [noData, setNoData] = useState(false)
   const chartRef = useRef<HTMLCanvasElement>(null)
   const chartInstance = useRef<Chart | null>(null)
 
   const xAxis = chartControls.throughputXAxis
   const isRelative = chartControls.throughputRelative
 
-  // Calculate theoretical throughput for a given concurrency
-  const calculateTheoreticalThroughput = (concurrency: number): number => {
+  // Calculate theoretical throughput for a given concurrency and TP
+  const calculateTheoreticalThroughput = (concurrency: number, tensorParallelism: number): number => {
     const ISL = config.inputSeqLength
     const OSL = config.outputSeqLength
+
+    // Get accelerator specs
+    const acceleratorSpec = ACCELERATORS[config.acceleratorType]
+
+    // Calculate compute for this specific TP
+    let computePerGPU: number
+    if (config.bytesPerParameter === 0.5) {
+      computePerGPU = acceleratorSpec.computeFP4 ?? acceleratorSpec.computeFP8
+    } else if (config.bytesPerParameter === 1) {
+      computePerGPU = acceleratorSpec.computeFP8
+    } else {
+      computePerGPU = acceleratorSpec.computeFP16
+    }
+    const totalCompute = tensorParallelism * computePerGPU * 1e12 // FLOP/s
+
+    // Calculate bandwidth for this specific TP
+    const totalBandwidth = tensorParallelism * acceleratorSpec.memoryBandwidth * 1e12 // bytes/s
+
+    // Calculate decode time for this specific concurrency and TP
+    const avgSeqLen = ISL + OSL / 2
+    const kvCachePerToken = 2 * model.numLayers * model.numKVHeads * model.headDim * config.bytesPerParameter
+    const kvCache = concurrency * avgSeqLen * kvCachePerToken
+    const modelWeights = model.modelSize * 1e9 * config.bytesPerParameter
+    const bytesPerDecode = modelWeights + kvCache
+    const decodeTime = (bytesPerDecode / totalBandwidth) * 1000 // ms
+
+    // Calculate threshold for this specific TP
+    const threshold = Math.round(totalCompute / (totalBandwidth / config.bytesPerParameter) / 2)
 
     // Calculate non-overlapped prefill tokens for this concurrency
     const nonOverlappedTokens = Math.max(0, concurrency * (ISL + OSL) - OSL * threshold)
 
     // Calculate time for non-overlapped prefill
-    const nonOverlappedTime = (nonOverlappedTokens * 2 * model.modelSize * 1e9 / compute) * 1000
+    const nonOverlappedTime = (nonOverlappedTokens * 2 * model.modelSize * 1e9 / totalCompute) * 1000
 
     // Total time (decode + non-overlapped prefill)
-    const totalTime = chunkedMode.enabled ? (decodeTime + nonOverlappedTime) : (concurrency * (ISL * 2 * model.modelSize * 1e9 / compute) * 1000 + decodeTime)
+    const totalTime = chunkedMode.enabled
+      ? (OSL * decodeTime + nonOverlappedTime)
+      : (concurrency * (ISL * 2 * model.modelSize * 1e9 / totalCompute) * 1000 + OSL * decodeTime)
 
     // Throughput = total output tokens / total time
     const totalOutputTokens = concurrency * OSL
     const throughput = (totalOutputTokens / totalTime) * 1000 // tokens/s
 
-    return throughput / config.tensorParallelism // per GPU
+    return throughput / tensorParallelism // per GPU
   }
 
   // Map our precision to benchmark precision names
@@ -126,21 +152,42 @@ export default function ThroughputChart() {
 
   // Create/update chart
   useEffect(() => {
-    if (!benchmarkData || !chartRef.current) return
+    if (!benchmarkData || !chartRef.current) {
+      setNoData(false)
+      return
+    }
 
     // Filter and sort data based on x-axis variable
     let filteredData: BenchmarkRow[]
     if (xAxis === 'concurrency') {
       // Filter for current TP, vary concurrency
       filteredData = benchmarkData.filter(row => row.TP === config.tensorParallelism)
-      if (filteredData.length === 0) return
+      if (filteredData.length === 0) {
+        // Show "No data" message
+        if (chartInstance.current) {
+          chartInstance.current.destroy()
+          chartInstance.current = null
+        }
+        setNoData(true)
+        return
+      }
       filteredData.sort((a, b) => a.Conc - b.Conc)
     } else {
       // Filter for current concurrency, vary TP
       filteredData = benchmarkData.filter(row => row.Conc === config.concurrentUsers)
-      if (filteredData.length === 0) return
+      if (filteredData.length === 0) {
+        // Show "No data" message
+        if (chartInstance.current) {
+          chartInstance.current.destroy()
+          chartInstance.current = null
+        }
+        setNoData(true)
+        return
+      }
       filteredData.sort((a, b) => a.TP - b.TP)
     }
+
+    setNoData(false)
 
     // Destroy existing chart
     if (chartInstance.current) {
@@ -158,7 +205,7 @@ export default function ThroughputChart() {
             label: 'Efficiency (%)',
             data: filteredData.map(row => {
               const actual = (row.Conc / (row['TPOT (ms)'] / 1000)) / row.TP
-              const theoretical = calculateTheoreticalThroughput(row.Conc)
+              const theoretical = calculateTheoreticalThroughput(row.Conc, row.TP)
               return (actual / theoretical) * 100
             }),
             borderColor: 'rgb(59, 130, 246)',
@@ -180,12 +227,12 @@ export default function ThroughputChart() {
           },
           {
             label: 'Theoretical Throughput',
-            data: filteredData.map(row => calculateTheoreticalThroughput(row.Conc)),
+            data: filteredData.map(row => calculateTheoreticalThroughput(row.Conc, row.TP)),
             borderColor: 'rgb(234, 88, 12)',
             backgroundColor: 'rgba(234, 88, 12, 0.1)',
             borderWidth: 2,
             borderDash: [5, 5],
-            pointRadius: 0,
+            pointRadius: 4,
             tension: 0,
           },
         ]
@@ -232,7 +279,7 @@ export default function ThroughputChart() {
         chartInstance.current.destroy()
       }
     }
-  }, [benchmarkData, config.tensorParallelism, config.concurrentUsers, compute, decodeTime, threshold, chunkedMode, model.modelSize, config.inputSeqLength, config.outputSeqLength, xAxis, isRelative])
+  }, [benchmarkData, config.tensorParallelism, config.concurrentUsers, config.acceleratorType, config.bytesPerParameter, chunkedMode, model, config.inputSeqLength, config.outputSeqLength, xAxis, isRelative])
 
   return (
     <div class="my-6">
@@ -273,8 +320,13 @@ export default function ThroughputChart() {
 
         {error && <div class="text-sm text-red-600 dark:text-red-400">{error}</div>}
 
-        {benchmarkData && benchmarkData.length > 0 && (
+        {!loading && !error && (
           <div style="height: 400px; position: relative;">
+            {noData && (
+              <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; background: white; z-index: 10;" class="dark:bg-gray-900">
+                <div class="text-gray-500 dark:text-gray-400">No benchmark data available for this configuration</div>
+              </div>
+            )}
             <canvas ref={chartRef}></canvas>
           </div>
         )}
