@@ -18,14 +18,41 @@ export default function GPUSpecsTable() {
     return { compute: spec.computeFP8, precision: 'FP8' }
   }
 
+  // Get datasheet URL based on accelerator type
+  const getDatasheetUrl = () => {
+    const urls: Record<string, string> = {
+      H100: 'https://resources.nvidia.com/en-us-gpu-resources/h100-datasheet-24306',
+      H200: 'https://resources.nvidia.com/en-us-data-center-overview-mc/en-us-data-center-overview/hpc-datasheet-sc23-h200',
+      B200: 'https://www.primeline-solutions.com/media/categories/server/nach-gpu/nvidia-hgx-h200/nvidia-blackwell-b200-datasheet.pdf',
+      MI325X: 'https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/product-briefs/instinct-mi325x-datasheet.pdf',
+      MI300X: 'https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/data-sheets/amd-instinct-mi300x-data-sheet.pdf',
+      MI355X: 'https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/product-briefs/amd-instinct-mi355x-gpu-brochure.pdf',
+    }
+    return urls[config.acceleratorType] || ''
+  }
+
   const { compute, precision } = getCurrentCompute()
+  const datasheetUrl = getDatasheetUrl()
 
   return (
     <div class="overflow-x-auto my-6">
       <table class="min-w-full border-collapse">
         <thead>
           <tr class="border-b border-gray-300 dark:border-gray-700">
-            <th colSpan={2} class="text-left py-2 px-4 font-semibold">{spec.name}</th>
+            <th colSpan={2} class="text-left py-2 px-4 font-semibold">
+              {datasheetUrl ? (
+                <a
+                  href={datasheetUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="hover:underline underline-offset-4 text-primary dark:text-primary-dark"
+                >
+                  {spec.name}
+                </a>
+              ) : (
+                spec.name
+              )}
+            </th>
           </tr>
         </thead>
         <tbody>

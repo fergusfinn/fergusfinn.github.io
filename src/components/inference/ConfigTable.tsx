@@ -14,6 +14,28 @@ export default function ConfigTable({ compact = false }: ConfigTableProps) {
     configStore.setKey(key, value as any)
   }
 
+  // Get supported precisions for current accelerator
+  const getSupportedPrecisions = () => {
+    const accelerator = ACCELERATORS[config.acceleratorType]
+    const precisions = []
+
+    if (accelerator.computeFP4) {
+      precisions.push({ value: 0.5, label: 'FP4' })
+    }
+    precisions.push({ value: 1, label: 'FP8' })
+    precisions.push({ value: 2, label: 'FP16/BF16' })
+
+    return precisions
+  }
+
+  const supportedPrecisions = getSupportedPrecisions()
+
+  // If current precision is not supported by new accelerator, switch to FP8
+  const currentPrecisionSupported = supportedPrecisions.some(p => p.value === config.bytesPerParameter)
+  if (!currentPrecisionSupported && config.bytesPerParameter === 0.5) {
+    updateConfig('bytesPerParameter', 1) // Switch to FP8
+  }
+
   const handleSeqLengthModeChange = (mode: string) => {
     setSeqLengthMode(mode)
     if (mode === '1024/1024') {
@@ -136,9 +158,9 @@ export default function ConfigTable({ compact = false }: ConfigTableProps) {
               }
               class="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value={0.5}>FP4</option>
-              <option value={1}>FP8</option>
-              <option value={2}>FP16/BF16</option>
+              {supportedPrecisions.map(p => (
+                <option key={p.value} value={p.value}>{p.label}</option>
+              ))}
             </select>
           </div>
         </>
@@ -261,9 +283,9 @@ export default function ConfigTable({ compact = false }: ConfigTableProps) {
                 }
                 class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <option value={0.5}>FP4</option>
-                <option value={1}>FP8</option>
-                <option value={2}>FP16/BF16</option>
+                {supportedPrecisions.map(p => (
+                  <option key={p.value} value={p.value}>{p.label}</option>
+                ))}
               </select>
             </td>
           </tr>

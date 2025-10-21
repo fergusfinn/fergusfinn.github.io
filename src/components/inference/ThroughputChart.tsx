@@ -50,6 +50,7 @@ export default function ThroughputChart() {
   const chartInstance = useRef<Chart | null>(null)
 
   const xAxis = chartControls.throughputXAxis
+  const isRelative = chartControls.throughputRelative
 
   // Calculate theoretical throughput for a given concurrency
   const calculateTheoreticalThroughput = (concurrency: number): number => {
@@ -152,14 +153,26 @@ export default function ThroughputChart() {
     const xAxisLabel = xAxis === 'concurrency' ? 'Concurrent Users' : 'Tensor Parallelism'
     const chartTitle = `Throughput per GPU vs ${xAxisLabel}`
 
-    chartInstance.current = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: filteredData.map(row => xAxis === 'concurrency' ? `${row.Conc}` : `${row.TP}`),
-        datasets: [
+    const datasets = isRelative
+      ? [
+          {
+            label: 'Efficiency (%)',
+            data: filteredData.map(row => {
+              const actual = (row.Conc / (row['TPOT (ms)'] / 1000)) / row.TP
+              const theoretical = calculateTheoreticalThroughput(row.Conc)
+              return (actual / theoretical) * 100
+            }),
+            borderColor: 'rgb(59, 130, 246)',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            borderWidth: 2,
+            pointRadius: 4,
+            tension: 0.1,
+          },
+        ]
+      : [
           {
             label: 'Actual Throughput',
-            data: filteredData.map(row => row['TPUT per GPU']),
+            data: filteredData.map(row => (row.Conc / (row['TPOT (ms)'] / 1000)) / row.TP),
             borderColor: 'rgb(59, 130, 246)',
             backgroundColor: 'rgba(59, 130, 246, 0.1)',
             borderWidth: 2,
@@ -176,7 +189,13 @@ export default function ThroughputChart() {
             pointRadius: 0,
             tension: 0,
           },
-        ],
+        ]
+
+    chartInstance.current = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: filteredData.map(row => xAxis === 'concurrency' ? `${row.Conc}` : `${row.TP}`),
+        datasets,
       },
       options: {
         devicePixelRatio: window.devicePixelRatio || 2,
@@ -201,7 +220,7 @@ export default function ThroughputChart() {
           y: {
             title: {
               display: true,
-              text: 'Throughput (tokens/s per GPU)',
+              text: isRelative ? 'Efficiency (% of Theoretical)' : 'Throughput (tokens/s per GPU)',
             },
             beginAtZero: true,
           },
@@ -214,7 +233,7 @@ export default function ThroughputChart() {
         chartInstance.current.destroy()
       }
     }
-  }, [benchmarkData, config.tensorParallelism, config.concurrentUsers, compute, decodeTime, threshold, chunkedMode, model.modelSize, config.inputSeqLength, config.outputSeqLength, xAxis])
+  }, [benchmarkData, config.tensorParallelism, config.concurrentUsers, compute, decodeTime, threshold, chunkedMode, model.modelSize, config.inputSeqLength, config.outputSeqLength, xAxis, isRelative])
 
   return (
     <div class="my-6">
@@ -222,16 +241,29 @@ export default function ThroughputChart() {
         <span class="sidenote-unnumbered">
           <div class="sidebar-content">
             <h3 class="sidebar-title">Throughput Chart</h3>
-            <div>
-              <label class="block text-xs font-semibold mb-1">X-axis</label>
-              <select
-                value={xAxis}
-                onChange={(e) => chartControlsStore.setKey('throughputXAxis', (e.target as HTMLSelectElement).value as XAxisVariable)}
-                class="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="concurrency">Concurrent Users</option>
-                <option value="tensorParallelism">Tensor Parallelism</option>
-              </select>
+            <div class="space-y-3">
+              <div>
+                <label class="block text-xs font-semibold mb-1">X-axis</label>
+                <select
+                  value={xAxis}
+                  onChange={(e) => chartControlsStore.setKey('throughputXAxis', (e.target as HTMLSelectElement).value as XAxisVariable)}
+                  class="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="concurrency">Concurrent Users</option>
+                  <option value="tensorParallelism">Tensor Parallelism</option>
+                </select>
+              </div>
+              <div>
+                <label class="flex items-center text-xs font-semibold cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isRelative}
+                    onChange={(e) => chartControlsStore.setKey('throughputRelative', (e.target as HTMLInputElement).checked)}
+                    class="mr-2"
+                  />
+                  Show Relative Performance
+                </label>
+              </div>
             </div>
           </div>
         </span>

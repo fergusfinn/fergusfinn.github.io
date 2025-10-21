@@ -18,7 +18,6 @@ import PrefillCalculation from '../../components/inference/PrefillCalculation.ts
 import DecodeCalculation from '../../components/inference/DecodeCalculation.tsx'
 import LatencyCalculation from '../../components/inference/LatencyCalculation.tsx'
 import ThroughputCalculation from '../../components/inference/ThroughputCalculation.tsx'
-import ChunkedPrefillingCalculation from '../../components/inference/ChunkedPrefillingCalculation.tsx'
 import NonOverlappedPrefillTokens from '../../components/inference/NonOverlappedPrefillTokens.tsx'
 import BenchmarkComparison from '../../components/inference/BenchmarkComparison.tsx'
 import ThroughputChart from '../../components/inference/ThroughputChart.tsx'
@@ -26,8 +25,9 @@ import LatencyChart from '../../components/inference/LatencyChart.tsx'
 
 How fast can an LLM go? <Sidenote> Great resources for doing this kind of of thinking: [here](https://kipp.ly/transformer-inference-arithmetic/), [here](https://jax-ml.github.io/scaling-book/)</Sidenote>
 
-Reading this [article](https://inferencemax.semianalysis.com/) made me curious as to how good our software is actually getting.
-Lets make some assumptions, and then work it through.
+Reading this [article](https://inferencemax.semianalysis.com/) made me curious
+as to how good our inference software is actually getting. Lets make some
+assumptions, and then work it through.
 
 Pick a configuration from the selector on the left to change the values throughout this article.
 
@@ -46,14 +46,16 @@ Pick a configuration from the selector on the left to change the values througho
 
 ## Working it through
 
-We need to start counting operations and memory.
-
 Transformers have a lot of different operations in them: softmax, RMSNorm,
-matrix multiplications, biases, attention, SiLU, etc. etc. But the good news for doing
-stuff with rules of thumb is that almost none of them matter. Matrix
+matrix multiplications, biases, attention, SwiGLU, etc. etc. But the good news
+for doing stuff with rules of thumb is that almost none of them matter. Matrix
 multiplications $(F, D) \times (D, B)$ take a number of FLOPS $O(2 BDF)$, and
-require us to transfer $O(n_{\mathrm{bytes}}(BD + DF + BF))$<Sidenote>$n_{\mathrm{bytes}}$ is the number of bytes per parameter - i.e. $1$ for fp8, $2$ for bf16, ..</Sidenote> values from HBM to & from the
-compute units. This scaling dominates everything else (softmaxes, norms, etc.
+require us to transfer $O(n_{\mathrm{bytes}}(BD + DF +
+BF))$<Sidenote>$n_{\mathrm{bytes}}$ is the number of bytes per parameter - i.e.
+$1$ for fp8, $2$ for bf16. This changes because of quantization. The FLOPS is
+the bitwidth specific FLOPS for that accelerator - for example, fp8 FLOPS on
+NVIDIA are 2x fp16 flops.</Sidenote> values from HBM to & from the compute
+units. This scaling dominates everything else (softmaxes, norms, etc.
 are all linear).
 
 Since almost all the models the parameters are in the matmuls, and the number
@@ -72,15 +74,12 @@ do computation on that data. Since the two can happen at the same time, we only
 need to care about the longer of the two. Which one we hit depends on our
 workload.
 
-<Sidenote unnumbered>
- Note: $B$ here is doing double duty in this article - below its the batch size
- passing through the transformer (i.e. number of sequences), here its the
- number of tokens passing through the matmul. Also, the approximation comes
- from $D \gg B$.
-</Sidenote>
-
 Which bucket does transformer inference fall into? Well, it depends. For a
-single $(F, D) \times (D, B)$ matmul to be compute bound, we need the
+single $(F, D) \times (D, B)$<Sidenote>
+$B$ here is doing double duty in this article - below its the batch size
+passing through the transformer (i.e. number of sequences), here its the
+number of tokens passing through the matmul. Also, the approximation comes
+from $D \gg B$. </Sidenote> matmul to be compute bound, we need the
 arithmetic intensity to exceed the accelerator's compute to bandwidth ratio:
 
 $$
@@ -88,11 +87,10 @@ $$
 $$
 
 So, we get our first result, the threshold number of tokens at which
-transformer inference becomes completely compute bound:
-
-<Sidenote unnumbered>
- Mouse over the underlined numbers to see their source
-</Sidenote>
+transformer inference becomes completely compute bound <Sidenote>
+Mouse over the underlined numbers to see their source. <br></br><br></br>This number changes
+with the accelerator, but is (only because of the approximation) independent
+of the model. </Sidenote>:
 
 <ComputeBoundThreshold client:load />
 
@@ -101,10 +99,10 @@ Try changing the accelerator to see how this threshold changes.
 ### Prefill
 
 Transformer inference has two phases: prefill, where we process the input
-prompt, and then decode, where we generate output tokens one at a time.
-Prefilling happens in parallel across all the input tokens. For all the
-configurations (change the sequence length selector and see), prefilling is
-compute bound, even without batching across multiple requests.
+prompt and generate KV cache, and then decode, where we generate output tokens
+one at a time. Prefilling happens in parallel across all the input tokens. For
+all the configurations (change the sequence length selector and see),
+prefilling is compute bound, even without batching across multiple requests.
 
 Compute bound means that we're bounded by the FLOP/s of the accelerator: i.e.
 its calculating just as hard as it can.
@@ -133,10 +131,6 @@ average sequence length is in the middle.
 
 <DecodeCalculation client:load />
 
-<Sidenote unnumbered>
- Note the memory bandwidth is multiplied by the tensor parallelism factor
-</Sidenote>
-
 ## Results
 
 ### End to End latency
@@ -156,14 +150,29 @@ them.
 
 This isn't broadly the case any more. We can do 'chunked prefilling' instead,
 where we have 'heterogeneous' batches, that contain both parts of a prefill,
-alongside a number of ongoing decodes.
+alongside a number of ongoing decodes. See the
+[appendix](#appendix-chunked-prefilling) for a broader discussion of how this
+changes the maths.
 
-This means in principle we can use some of the idle compute during decodes to prefill new
-sequences.
+This means in principle we can use some of the idle compute during decodes to
+prefill new sequences.
 
 <ThroughputCalculation client:load />
 
-### Comparison with Benchmarks
+### Real numbers
+
+We've been at the highest level - comparing the datasheet numbers with the
+theoretical work that the system has to do. In practise, there are overheads:
+
+1. **All the linear ops**: Softmaxes, norms, biases, SwiGLU, etc.
+2. **Framework overhead**: Kernel launch overheads, data movement overheads,
+   scheduling overheads, etc.
+3. **Imperfect comms overlapping**: We haven't talked about comms at all -
+   we've been implicitly assuming that all data transfers for an op happen
+   perfectly asynchronously with compute. This definitely doesn't always happen.
+4. Lots of other stuff: thermals, bugs, cosmic rays, etc.
+
+With that all in mind, how do real world numbers compare?
 
 <BenchmarkComparison client:load />
 
@@ -200,7 +209,15 @@ $$
 $$
 
 The condition here is that decode batches are made perfectly compute bound by the
-addition of prefill chunks.
+addition of prefill chunks <Sidenote>
+How good is this modelling? Mixed. The big thing that's missing is that
+chunked prefilling incurs extra memory transfer, which will slow down the
+decodes regardless of the compute threshold. In fact, it incurs _more_ memory
+transfer (in total) than doing prefill and decode separately, since some parts
+of KV cache have to be transferred multiple times. For example, for an $ISL$
+of 8192 tokens and a chunk size of 1024, the KV cache for the first 1024
+tokens is transferred 7 times. In principle it's $O(ISL^2)$ extra memory
+transfer, but the chunk size brings down the scaling by a lot. </Sidenote>.
 
 If this is the case, then we can do $OSL$ prefill chunks 'for free' in parallel
 with the decodes. There are:

@@ -6,11 +6,15 @@ type XAxisVariable = 'concurrency' | 'tensorParallelism'
 export interface ChartControlsState {
   throughputXAxis: XAxisVariable
   latencyXAxis: XAxisVariable
+  throughputRelative: boolean
+  latencyRelative: boolean
 }
 
 export const chartControlsStore = map<ChartControlsState>({
   throughputXAxis: 'concurrency',
   latencyXAxis: 'concurrency',
+  throughputRelative: false,
+  latencyRelative: false,
 })
 
 export default function ChartControls() {

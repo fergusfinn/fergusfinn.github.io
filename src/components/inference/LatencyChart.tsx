@@ -45,6 +45,7 @@ export default function LatencyChart() {
   const chartInstance = useRef<Chart | null>(null)
 
   const xAxis = chartControls.latencyXAxis
+  const isRelative = chartControls.latencyRelative
 
   // Calculate theoretical latency for given TP and concurrency
   const calculateTheoreticalLatency = (tp: number, concurrency: number): number => {
@@ -163,11 +164,24 @@ export default function LatencyChart() {
     const xAxisLabel = xAxis === 'concurrency' ? 'Concurrent Users' : 'Tensor Parallelism'
     const chartTitle = `E2E Latency vs ${xAxisLabel}`
 
-    chartInstance.current = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: filteredData.map(row => xAxis === 'concurrency' ? `${row.Conc}` : `${row.TP}`),
-        datasets: [
+    const datasets = isRelative
+      ? [
+          {
+            label: 'Efficiency (%)',
+            data: filteredData.map(row => {
+              const actual = row['E2EL (s)']
+              const theoretical = calculateTheoreticalLatency(row.TP, row.Conc)
+              // For latency, lower is better, so theoretical/actual gives efficiency
+              return (theoretical / actual) * 100
+            }),
+            borderColor: 'rgb(59, 130, 246)',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            borderWidth: 2,
+            pointRadius: 4,
+            tension: 0.1,
+          },
+        ]
+      : [
           {
             label: 'Actual Latency',
             data: filteredData.map(row => row['E2EL (s)']),
@@ -191,7 +205,13 @@ export default function LatencyChart() {
             pointRadius: 0,
             tension: 0,
           },
-        ],
+        ]
+
+    chartInstance.current = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: filteredData.map(row => xAxis === 'concurrency' ? `${row.Conc}` : `${row.TP}`),
+        datasets,
       },
       options: {
         devicePixelRatio: window.devicePixelRatio || 2,
@@ -216,7 +236,7 @@ export default function LatencyChart() {
           y: {
             title: {
               display: true,
-              text: 'Latency (seconds)',
+              text: isRelative ? 'Efficiency (% of Theoretical)' : 'Latency (seconds)',
             },
             beginAtZero: true,
           },
@@ -229,7 +249,7 @@ export default function LatencyChart() {
         chartInstance.current.destroy()
       }
     }
-  }, [benchmarkData, config.tensorParallelism, config.concurrentUsers, config.inputSeqLength, config.outputSeqLength, config.bytesPerParameter, config.acceleratorType, model, calcLatency, xAxis])
+  }, [benchmarkData, config.tensorParallelism, config.concurrentUsers, config.inputSeqLength, config.outputSeqLength, config.bytesPerParameter, config.acceleratorType, model, calcLatency, xAxis, isRelative])
 
   return (
     <div class="my-6">
@@ -237,16 +257,29 @@ export default function LatencyChart() {
         <span class="sidenote-unnumbered">
           <div class="sidebar-content">
             <h3 class="sidebar-title">Latency Chart</h3>
-            <div>
-              <label class="block text-xs font-semibold mb-1">X-axis</label>
-              <select
-                value={xAxis}
-                onChange={(e) => chartControlsStore.setKey('latencyXAxis', (e.target as HTMLSelectElement).value as XAxisVariable)}
-                class="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="concurrency">Concurrent Users</option>
-                <option value="tensorParallelism">Tensor Parallelism</option>
-              </select>
+            <div class="space-y-3">
+              <div>
+                <label class="block text-xs font-semibold mb-1">X-axis</label>
+                <select
+                  value={xAxis}
+                  onChange={(e) => chartControlsStore.setKey('latencyXAxis', (e.target as HTMLSelectElement).value as XAxisVariable)}
+                  class="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="concurrency">Concurrent Users</option>
+                  <option value="tensorParallelism">Tensor Parallelism</option>
+                </select>
+              </div>
+              <div>
+                <label class="flex items-center text-xs font-semibold cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isRelative}
+                    onChange={(e) => chartControlsStore.setKey('latencyRelative', (e.target as HTMLInputElement).checked)}
+                    class="mr-2"
+                  />
+                  Show Relative Performance
+                </label>
+              </div>
             </div>
           </div>
         </span>

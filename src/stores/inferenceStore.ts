@@ -3,7 +3,7 @@ import { map, computed } from 'nanostores'
 // Accelerator specifications
 export interface AcceleratorSpec {
   name: string
-  computeFP4: number // TFLOPS in FP4 (2x FP8)
+  computeFP4?: number // TFLOPS in FP4 (2x FP8) - optional, not all GPUs support FP4
   computeFP8: number // TFLOPS in FP8
   computeFP16: number // TFLOPS in FP16 (0.5x FP8)
   memoryBandwidth: number // TB/s
@@ -12,9 +12,9 @@ export interface AcceleratorSpec {
 export const ACCELERATORS: Record<string, AcceleratorSpec> = {
   MI355X: {
     name: 'AMD MI355X',
-    computeFP4: 10000, // TFLOPS FP4 (2x FP8)
-    computeFP8: 5000, // TFLOPS FP8
-    computeFP16: 2500, // TFLOPS FP16 (0.5x FP8)
+    computeFP4: 10066.4, // TFLOPS FP4 (2x FP8, or MXFP6 sparsity-adjusted)
+    computeFP8: 5033.2, // TFLOPS FP8 (10.0664 PFLOPS / 2 for sparsity)
+    computeFP16: 2516.6, // TFLOPS FP16 (5.0332 PFLOPS / 2 for sparsity)
     memoryBandwidth: 8.0, // TB/s
   },
   B200: {
@@ -26,28 +26,28 @@ export const ACCELERATORS: Record<string, AcceleratorSpec> = {
   },
   MI325X: {
     name: 'AMD MI325X',
-    computeFP4: 5220, // TFLOPS FP4 (2x FP8)
-    computeFP8: 2610, // TFLOPS FP8
-    computeFP16: 1305, // TFLOPS FP16 (0.5x FP8)
+    computeFP4: 5229.8, // TFLOPS FP4 (sparsity-adjusted from datasheet)
+    computeFP8: 2614.9, // TFLOPS FP8 (5229.8 / 2 for sparsity)
+    computeFP16: 1307.4, // TFLOPS FP16 (2614.9 / 2 for sparsity)
     memoryBandwidth: 6.0, // TB/s
   },
   MI300X: {
     name: 'AMD MI300X',
-    computeFP4: 5220, // TFLOPS FP4 (2x FP8)
-    computeFP8: 2610, // TFLOPS FP8
-    computeFP16: 1305, // TFLOPS FP16 (0.5x FP8)
+    computeFP4: 5229.8, // TFLOPS FP4 (sparsity-adjusted from datasheet)
+    computeFP8: 2614.9, // TFLOPS FP8 (5229.8 / 2 for sparsity)
+    computeFP16: 1307.4, // TFLOPS FP16 (2614.9 / 2 for sparsity)
     memoryBandwidth: 5.3, // TB/s
   },
   H200: {
     name: 'NVIDIA H200',
-    computeFP4: 3958, // TFLOPS FP4 (2x FP8)
+    // FP4 not supported
     computeFP8: 1979, // TFLOPS FP8
     computeFP16: 989.5, // TFLOPS FP16 (0.5x FP8)
     memoryBandwidth: 4.8, // TB/s
   },
   H100: {
     name: 'NVIDIA H100',
-    computeFP4: 3958, // TFLOPS FP4 (2x FP8)
+    // FP4 not supported
     computeFP8: 1979, // TFLOPS FP8
     computeFP16: 989.5, // TFLOPS FP16 (0.5x FP8)
     memoryBandwidth: 3.35, // TB/s
@@ -110,7 +110,7 @@ export const totalCompute = computed(
     // Select compute based on bytes per parameter
     let compute: number
     if (config.bytesPerParameter === 0.5) {
-      compute = spec.computeFP4
+      compute = spec.computeFP4 ?? spec.computeFP8 // Fallback to FP8 if FP4 not supported
     } else if (config.bytesPerParameter === 1) {
       compute = spec.computeFP8
     } else if (config.bytesPerParameter === 2) {
@@ -163,7 +163,7 @@ export const kvCachePerToken = computed([modelStore, configStore], (model, confi
 
 export const avgSeqLength = computed([configStore], (config) => {
   // Average sequence length during generation
-  return config.inputSeqLength + config.outputSeqLength / 2
+  return (2 * config.inputSeqLength + config.outputSeqLength) / 2
 })
 
 export const kvCachePerSequence = computed(

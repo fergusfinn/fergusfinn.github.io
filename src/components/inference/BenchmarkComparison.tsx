@@ -86,11 +86,7 @@ export default function BenchmarkComparison() {
   )
 
   return (
-    <div class="my-6 p-4 bg-slate-50 dark:bg-slate-900/20 rounded-lg border border-slate-200 dark:border-slate-800">
-      <div class="mb-3">
-        <h3 class="text-lg font-semibold">Benchmark Comparison</h3>
-      </div>
-
+    <div class="my-6">
       <div class="space-y-3">
         {loading && <div class="text-sm text-gray-600 dark:text-gray-400">Loading benchmark data...</div>}
 
@@ -119,15 +115,15 @@ export default function BenchmarkComparison() {
                   <tr class="border-b border-gray-200 dark:border-gray-800">
                     <td class="py-2 px-2">Throughput/GPU</td>
                     <td class="text-right py-2 px-2">{formatNumber(calcThroughput, 0)} tok/s</td>
-                    <td class="text-right py-2 px-2">{formatNumber(matchingRow['TPUT per GPU'], 0)} tok/s</td>
+                    <td class="text-right py-2 px-2">{formatNumber((matchingRow.Conc / (matchingRow['TPOT (ms)'] / 1000)) / matchingRow.TP, 0)} tok/s</td>
                     <td class="text-right py-2 px-2">
-                      {formatNumber((matchingRow['TPUT per GPU'] / calcThroughput) * 100)}%
+                      {formatNumber(((matchingRow.Conc / (matchingRow['TPOT (ms)'] / 1000)) / matchingRow.TP / calcThroughput) * 100)}%
                     </td>
                   </tr>
                 </tbody>
               </table>
               <div class="mt-2 text-xs text-gray-600 dark:text-gray-400">
-                Framework: {matchingRow.Framework} | TP={matchingRow.TP} | Conc={matchingRow.Conc}
+                Framework: {matchingRow.Framework} | TP={matchingRow.TP} | Conc={matchingRow.Conc} | 21 Oct 2025 | Source: <a href="https://inferencemax.semianalysis.com/" target="_blank" rel="noopener noreferrer" class="underline hover:text-gray-800 dark:hover:text-gray-300">SemiAnalysis</a>
               </div>
             </div>
           )}
