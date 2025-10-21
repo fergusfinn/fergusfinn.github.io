@@ -170,7 +170,9 @@ theoretical work that the system has to do. In practise, there are overheads:
 3. **Imperfect comms overlapping**: We haven't talked about comms at all -
    we've been implicitly assuming that all data transfers for an op happen
    perfectly asynchronously with compute. This definitely doesn't always happen.
-4. Lots of other stuff: thermals, bugs, cosmic rays, etc.
+4. **Chunked prefilling overheads**: There's more memory movement with chunked
+   prefilling than we've accounted for. See the appendix for more details.
+5. Lots of other stuff: thermals, bugs, cosmic rays, etc.
 
 With that all in mind, how do real world numbers compare?
 

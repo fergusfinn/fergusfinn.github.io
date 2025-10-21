@@ -3,7 +3,6 @@ import {
   nonOverlappedPrefillTokens,
   configStore,
   computeBoundThreshold,
-  formatLargeNumber,
   formatNumber,
 } from '../../stores/inferenceStore'
 import Tooltip from '../Tooltip'

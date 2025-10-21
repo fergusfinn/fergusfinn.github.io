@@ -56,7 +56,7 @@ export default function LatencyChart() {
     // Get precision-specific compute
     let compute: number
     if (config.bytesPerParameter === 0.5) {
-      compute = accelerator.computeFP4
+      compute = accelerator.computeFP4 ?? accelerator.computeFP8
     } else if (config.bytesPerParameter === 1) {
       compute = accelerator.computeFP8
     } else {
@@ -162,7 +162,6 @@ export default function LatencyChart() {
     if (!ctx) return
 
     const xAxisLabel = xAxis === 'concurrency' ? 'Concurrent Users' : 'Tensor Parallelism'
-    const chartTitle = `E2E Latency vs ${xAxisLabel}`
 
     const datasets = isRelative
       ? [

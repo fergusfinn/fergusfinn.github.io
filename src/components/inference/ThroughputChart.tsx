@@ -151,7 +151,6 @@ export default function ThroughputChart() {
     if (!ctx) return
 
     const xAxisLabel = xAxis === 'concurrency' ? 'Concurrent Users' : 'Tensor Parallelism'
-    const chartTitle = `Throughput per GPU vs ${xAxisLabel}`
 
     const datasets = isRelative
       ? [
