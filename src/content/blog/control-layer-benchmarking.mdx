@@ -18,9 +18,9 @@ therefore blazing fast</Sidenote>, and because we thought about performance a
 lot while we were building it. We put it in production in our self-hosted
 inference stack, and we knew that it was fast because we didn't notice it.
 
-But we're open sourcing it. And once its out there, it can be used in lots of
+But we're [open sourcing it](https://fergusfinn.com/blog/control-layer). And once its out there, it can be used in lots of
 different places, in lots of different ways. And so, to prove that it will be
-fast everywhere, we have to do benchmarking. <Sidenote> The usual caveats about general case benchmarks apply: the only realistic
+fast everywhere, we have to do benchmarking<Sidenote> The usual caveats about general case benchmarks apply: the only realistic
 benchmarks are built by you, the user, since only you know what your
 application looks like. Every highly technical business for whom performance
 is a proof point eventually releases a weary blog post talking about how
@@ -29,11 +29,10 @@ performance is multifaceted and can't be captured by simple benchmarks. See
 [here](https://motherduck.com/blog/perf-is-not-enough/),
 [here](https://hannes.muehleisen.org/publications/DBTEST2018-performance-testing.pdf),
 [here](https://blog.tjll.net/reverse-proxy-hot-dog-eating-contest-caddy-vs-nginx/)
-for interesting content. </Sidenote>
-.
+for interesting content. </Sidenote>.
 
 <Sidenote unnumbered>
- Fig. 1: How this article is going to go. From
+ Fig. 1: How these sorts of articles go. From
  [this](https://hannes.muehleisen.org/publications/DBTEST2018-performance-testing.pdf)
  article on benchmarking in DBMS.
 </Sidenote>
@@ -280,8 +279,8 @@ slowest part of my system - that's almost certainly the LLM. To which - fair.
 This isn't LLM inference optimization<Sidenote>If you care about that sort of
 stuff, see
 [here](https://fergusfinn.com/blog/scheduling-in-inference-engines/),
-[here](http://fergusfinn.com/blog/llm-guided-scheduling/),
-[here](http://fergusfinn.com/blog/spacelike-speculative-decoding/),
+[here](https://fergusfinn.com/blog/llm-guided-scheduling/),
+[here](https://fergusfinn.com/blog/spacelike-speculative-decoding/),
 [here](https://docs.doubleword.ai/conceptual/10-06-2025-bts-2)</Sidenote>,
 where you're working on systems that are painfully slow, and where if they were
 10 times faster you could change the whole world.
@@ -300,7 +299,7 @@ them, then they're doing a bad job. If API consumers notice that they're being
 served behind a reverse proxy, then the proxy is doing a bad job. Even small
 performance improvements can help us to disappear.
 
-If you'd like to get started with dwctl, join us on the
-[github](https://github.com/doublewordai/dwctl). For issues, with our
+If you'd like to get started with the Doubleword Control Layer, join us on the
+[github](https://github.com/doublewordai/control-layer). For issues, with our
 performance or my benchmarking methodology, raise them on the [issues
-page](https://github.com/doublewordai/dwctl/issues).
+page](https://github.com/doublewordai/control-layer/issues).
