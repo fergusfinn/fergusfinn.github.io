@@ -23,7 +23,6 @@ export default function ConfigTable({ compact = false }: ConfigTableProps) {
       precisions.push({ value: 0.5, label: 'FP4' })
     }
     precisions.push({ value: 1, label: 'FP8' })
-    precisions.push({ value: 2, label: 'FP16/BF16' })
 
     return precisions
   }
