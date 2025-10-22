@@ -4,6 +4,7 @@ import {
   configStore,
   throughputPerGPU,
   e2eLatency,
+  prefillTime,
   formatNumber,
 } from '../../stores/inferenceStore'
 
@@ -23,6 +24,7 @@ export default function BenchmarkComparison() {
   const config = useStore(configStore)
   const calcThroughput = useStore(throughputPerGPU)
   const calcLatency = useStore(e2eLatency)
+  const calcTTFT = useStore(prefillTime)
 
   const [benchmarkData, setBenchmarkData] = useState<BenchmarkRow[] | null>(null)
   const [loading, setLoading] = useState(false)
@@ -92,41 +94,49 @@ export default function BenchmarkComparison() {
 
         {error && <div class="text-sm text-red-600 dark:text-red-400">{error}</div>}
 
-          {matchingRow && (
-            <div class="overflow-x-auto">
-              <table class="min-w-full text-sm">
-                <thead>
-                  <tr class="border-b border-gray-300 dark:border-gray-700">
-                    <th class="text-left py-2 px-2">Metric</th>
-                    <th class="text-right py-2 px-2">Theoretical</th>
-                    <th class="text-right py-2 px-2">Actual</th>
-                    <th class="text-right py-2 px-2">% of Theoretical</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr class="border-b border-gray-200 dark:border-gray-800">
-                    <td class="py-2 px-2">E2E Latency</td>
-                    <td class="text-right py-2 px-2">{formatNumber(calcLatency / 1000)} s</td>
-                    <td class="text-right py-2 px-2">{formatNumber(matchingRow['E2EL (s)'])} s</td>
-                    <td class="text-right py-2 px-2">
-                      {formatNumber((matchingRow['E2EL (s)'] / (calcLatency / 1000)) * 100)}%
-                    </td>
-                  </tr>
-                  <tr class="border-b border-gray-200 dark:border-gray-800">
-                    <td class="py-2 px-2">Throughput/GPU</td>
-                    <td class="text-right py-2 px-2">{formatNumber(calcThroughput, 0)} tok/s</td>
-                    <td class="text-right py-2 px-2">{formatNumber((matchingRow.Conc / (matchingRow['TPOT (ms)'] / 1000)) / matchingRow.TP, 0)} tok/s</td>
-                    <td class="text-right py-2 px-2">
-                      {formatNumber(((matchingRow.Conc / (matchingRow['TPOT (ms)'] / 1000)) / matchingRow.TP / calcThroughput) * 100)}%
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-              <div class="mt-2 text-xs text-gray-600 dark:text-gray-400">
-                Framework: {matchingRow.Framework} | TP={matchingRow.TP} | Conc={matchingRow.Conc} | 21 Oct 2025 | Source: <a href="https://inferencemax.semianalysis.com/" target="_blank" rel="noopener noreferrer" class="underline hover:text-gray-800 dark:hover:text-gray-300">SemiAnalysis</a>
-              </div>
+        {matchingRow && (
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead>
+                <tr class="border-b border-gray-300 dark:border-gray-700">
+                  <th class="text-left py-2 px-2">Metric</th>
+                  <th class="text-right py-2 px-2">Theoretical</th>
+                  <th class="text-right py-2 px-2">Actual</th>
+                  <th class="text-right py-2 px-2">% of Theoretical</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="border-b border-gray-200 dark:border-gray-800">
+                  <td class="py-2 px-2">Time to First Token</td>
+                  <td class="text-right py-2 px-2">{formatNumber(calcTTFT)} ms</td>
+                  <td class="text-right py-2 px-2">{formatNumber(matchingRow['TTFT (ms)'])} ms</td>
+                  <td class="text-right py-2 px-2">
+                    {formatNumber((matchingRow['TTFT (ms)'] / calcTTFT) * 100)}%
+                  </td>
+                </tr>
+                <tr class="border-b border-gray-200 dark:border-gray-800">
+                  <td class="py-2 px-2">E2E Latency</td>
+                  <td class="text-right py-2 px-2">{formatNumber(calcLatency / 1000)} s</td>
+                  <td class="text-right py-2 px-2">{formatNumber(matchingRow['E2EL (s)'])} s</td>
+                  <td class="text-right py-2 px-2">
+                    {formatNumber((matchingRow['E2EL (s)'] / (calcLatency / 1000)) * 100)}%
+                  </td>
+                </tr>
+                <tr class="border-b border-gray-200 dark:border-gray-800">
+                  <td class="py-2 px-2">Throughput/GPU</td>
+                  <td class="text-right py-2 px-2">{formatNumber(calcThroughput, 0)} tok/s</td>
+                  <td class="text-right py-2 px-2">{formatNumber((matchingRow.Conc / (matchingRow['TPOT (ms)'] / 1000)) / matchingRow.TP, 0)} tok/s</td>
+                  <td class="text-right py-2 px-2">
+                    {formatNumber(((matchingRow.Conc / (matchingRow['TPOT (ms)'] / 1000)) / matchingRow.TP / calcThroughput) * 100)}%
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="mt-2 text-xs text-gray-600 dark:text-gray-400">
+              Framework: {matchingRow.Framework} | TP={matchingRow.TP} | Conc={matchingRow.Conc} | 21 Oct 2025 | Source: <a href="https://inferencemax.semianalysis.com/" target="_blank" rel="noopener noreferrer" class="underline hover:text-gray-800 dark:hover:text-gray-300">SemiAnalysis</a>
             </div>
-          )}
+          </div>
+        )}
 
         {!loading && !error && benchmarkData && !matchingRow && (
           <div class="text-sm text-gray-600 dark:text-gray-400">
