@@ -1,10 +1,9 @@
 ---
-title: 'Inference Arithmetic'
+title: 'How fast can LLM inference go? '
 description: |
-  Arithmetic on LLM inference performance
+  Comparing InferenceMAX to the hardware limits
 pubDate: 'Oct 22 2025'
 slug: inference-arithmetic
-index: false
 showConfigSidebar: true
 stickyToc: false
 ---
@@ -16,6 +15,7 @@ import ModelParamsTable from '../../components/inference/ModelParamsTable.tsx'
 import ComputeBoundThreshold from '../../components/inference/ComputeBoundThreshold.tsx'
 import PrefillCalculation from '../../components/inference/PrefillCalculation.tsx'
 import DecodeCalculation from '../../components/inference/DecodeCalculation.tsx'
+import TimeToFirstToken from '../../components/inference/TimeToFirstToken.tsx'
 import LatencyCalculation from '../../components/inference/LatencyCalculation.tsx'
 import ThroughputCalculation from '../../components/inference/ThroughputCalculation.tsx'
 import NonOverlappedPrefillTokens from '../../components/inference/NonOverlappedPrefillTokens.tsx'
@@ -131,7 +131,13 @@ average sequence length is in the middle.
 
 <DecodeCalculation client:load />
 
-## Results
+## Theoretical results
+
+### Time to first token
+
+The fastest possible time to first token is just the prefill time for the input sequence:
+
+<TimeToFirstToken client:load />
 
 ### End to End latency
 
@@ -142,45 +148,141 @@ the decode time multiplied by the number of output tokens:
 
 ### Throughput
 
-To calculate throughput, we need to account for both prefill and decode phases.
-The calculation depends on how we schedule these phases.
-If we do what was done in popular inference engines in the last few years, we
-run decode until we get new sequences to prefill, and then pause to prefill
-them.
+Throughput is a little harder. To calculate throughput, we need to account for
+both prefill and decode phases, and the calculation depends on how we schedule
+these phases. If we do what was done in popular inference engines in the last
+few years, we run decode until we get new sequences to prefill, and then pause
+to prefill them. This is easy to reason about - we just calculate how long it
+will take to prefill and decode all the sequences in a batch, and divide the
+total number of output tokens by that time.
 
-This isn't broadly the case any more. We can do 'chunked prefilling' instead,
-where we have 'heterogeneous' batches, that contain both parts of a prefill,
-alongside a number of ongoing decodes. See the
-[appendix](#appendix-chunked-prefilling) for a broader discussion of how this
-changes the maths.
+Most engines don't do this any more. What we do instead, is _chunked
+prefilling_. Instead, of segregating prefill and decode phases, we build
+'heterogeneous' batches, that contain parts of a prefill _and_ a number of
+ongoing decodes.
 
 This means in principle we can use some of the idle compute during decodes to
-prefill new sequences.
+prefill new sequences. How much we can get 'for free' depends on how much spare
+compute across all the decodes that we do. See the
+[appendix](#appendix-chunked-prefilling) for a broader discussion of how this
+changes the maths. Toggle the 'Chunked Prefilling' checkbox to see how this
+changes the theoretical throughput.
 
 <ThroughputCalculation client:load />
 
-### Real numbers
+## Real numbers
 
 We've been at the highest level - comparing the datasheet numbers with the
 theoretical work that the system has to do. In practise, there are overheads:
 
-1. **All the linear ops**: Softmaxes, norms, biases, SwiGLU, etc.
-2. **Framework overhead**: Kernel launch overheads, data movement overheads,
+1. **Framework overhead**: Kernel launch overheads, data movement overheads,
    scheduling overheads, etc.
-3. **Imperfect comms overlapping**: We haven't talked about comms at all -
-   we've been implicitly assuming that all data transfers for an op happen
-   perfectly asynchronously with compute. This definitely doesn't always happen.
-4. **Chunked prefilling overheads**: There's more memory movement with chunked
+2. **Imperfect comms overlapping**: We haven't talked about comms at all -
+   we've been implicitly assuming that all data transfers - both between
+   accelerators, and from HBM to compute units - for an op happen perfectly
+   asynchronously with compute. This definitely doesn't always happen.
+3. **Chunked prefilling overheads**: There's more memory movement with chunked
    prefilling than we've accounted for. See the appendix for more details.
+4. **Achievable numbers**: The maximum achievable numbers for the hardware are
+   usually lower than the numbers on the datasheet. See
+   [here](https://github.com/stas00/ml-engineering/tree/master/compute/accelerator#maximum-achievable-flops)
+   for a great attempt to actually measure this, or
+   [this](https://www.thonking.ai/p/strangely-matrix-multiplications) for the
+   surprising sorts of things that can matter.
 5. Lots of other stuff: thermals, bugs, cosmic rays, etc.
 
 With that all in mind, how do real world numbers compare?
 
+For the configuration selected on the left, here are the results from the
+[inferenceMAX](https://inferencemax.semianalysis.com/) benchmarks:
+
 <BenchmarkComparison client:load />
+
+The real world gets pretty close! Most configurations, across
+most accelerators are between 20-50% of the possible performance. It's worth
+noting that our two numbers should trade off against each other here - its
+impossible, with our assumptions, to achieve minimal latency and maximal
+throughput at the same time. In fact, our latency & TTFT numbers are theoretical
+_minimums_, whereas the reported latency numbers are averages. It's
+possible that the actual minimum latencies over benchmark runs are much closer
+to our numbers, but they're not reported in the benchmark numbers. This is
+especially bad for time to first token, where some sequences will have to
+queue to achieve maximum throughput.
+
+### Across configurations
+
+Toggle the dropdowns on the right to change the X axis. Changing the value not
+on the x axis (in the configuration selector on the left) will change the lines
+shown.
+
+#### Throughput
+
+1. Performance drops as tensor parallelism increases. This is probably because
+   we neglected comms, and it looks like popular frameworks don't overlap it
+   perfectly. I'm assuming it's theoretically possible with the inter-accelerator
+   bandwidths here, though we didn't work it through.
+2. Relative performance decreases as the number of concurrent users increases.
+   Its hard to say why this is the case - there are lots of 'framework things'
+   that scale with the number of concurrent users (i.e. scheduling overheads).
+   Also the ceilings are much higher here, so harder to hit.
+3. AMD by and large does worse than NVIDIA, relative to their theoretical peak
+   performance. This is borne out in the [maximum achievable
+   FLOPS](https://github.com/stas00/ml-engineering/tree/master/compute/accelerator#maximum-achievable-flops)
+   numbers too - although those also still depend on the software stack. It's hard
+   to say why - maybe AMD chips are structurally less able to be driven to maximum
+   performance, or maybe its just that the low level libraries (i.e. the matmul
+   kernels) are less well-optimized.
+4. For high ISL, you can see a 'kink' in the theoretical throughput, as the KV
+   cache loading starts to dominate the weight loading.
 
 <ThroughputChart client:load />
 
+#### End-to-End Latency
+
+1. You can see the throughput latency tradeoff here in the benchmark data and
+   the theoretical data - more concurrent users means higher latency. This
+   comes from increasing the KV cache transfer time (i.e. model weight transfers
+   are constant with batch size, but KV cache transfers aren't). In the real
+   numbers, we probably also have more chunked prefills contending with decodes,
+   and queueing effects too.
+2. Generally, the results aren't too far off what you'd expect from just the
+   differences between average and minimum E2E latencies. It would be
+   interesting if the benchmarks reported minimum latencies too (also very easy to
+   just do).
+
 <LatencyChart client:load />
+
+## Outlook: how to get faster
+
+With the theoretical assumptions we've made here, a reasonable guess is that
+there's single to low double digit percentages left on the table in software.
+
+Can we break our assumptions to raise the ceilings? The two big ones are:
+
+1. **Decode is memory bandwidth bound, and prefill is compute bound, and one chip has to do both.**
+   This is the most flexible one. Things that weaken this:
+   - **Speculative decoding**, which increases the number of tokens processed
+     per decode step, increasing the arithmetic intensity. Even for high decode
+     batch sizes, we can start to become bandwidth bound because of KV cache
+     transfer, so there's space for good speculators to help here.
+   - **Disaggregated prefilling**, with which we do the prefill and decode
+     steps on different hardware. This means we don't need one chip to have the
+     highest values of both bandwidth and compute. Mostly, this lets us optimize
+     cost at the moment<Sidenote>See [here](https://www.doubleword.ai/resources/should-gpus-make-free-trade-agreements) for how.</Sidenote> (since B200s have an absolute advantage in both), but
+     specialization will likely help in the future. I.e.
+     [groq's](https://groq.com/lpu-architecture) LPUs are perfect decoding chips.
+
+2. **The Llama-3 architecture.**
+   - Llama-3 is pretty old, and since it came out, almost everything has moved
+     over to MoE models. For MoE models, the figure of merit for inference performance is _active
+     parameters_, not total parameters, so roofline performances for fixed total parameters go up.
+   - There are loads of other architectural improvements that help -
+     [flashMLA](https://github.com/deepseek-ai/FlashMLA), linear attention, &c,
+     &c.
+
+All in, these [benchmarks](https://inferencemax.semianalysis.com/) are a really
+useful resource. I'm looking forward to seeing how the numbers change as both
+software and hardware improve.
 
 ---
 
