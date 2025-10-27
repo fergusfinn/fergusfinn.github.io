@@ -296,7 +296,8 @@ software and hardware improve.
     time ($S=1$) is $O(1)$. This makes where to put attention on the memory-bound
     vs. flops bound spectrum pretty easy to figure - it's FLOPs bound at prefill
     time, and memory bound at decode time. So we should include the attention FLOPs
-    in the prefill calculation.
+    in the prefill calculation. There's many fewer of them at the sequence lengths
+    we're looking at than matmul FLOPs, but enough to matter.
 
 [^2]:
     vLLM's default scheduler (as of v0.10.0) uses **chunked prefilling**. The idea
