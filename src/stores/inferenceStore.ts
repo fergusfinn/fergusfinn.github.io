@@ -89,7 +89,7 @@ export interface ModelParams {
 }
 
 export const modelStore = map<ModelParams>({
-  modelSize: 70,
+  modelSize: 69.35, // 70.4B - (2.1B/2) - non-embedding parameters
   headDim: 128,
   hiddenSize: 8192,
   numKVHeads: 8,

@@ -60,9 +60,11 @@ units. This scaling dominates everything else (softmaxes, norms, etc.
 are all linear).
 
 Since almost all the model's parameters are in the matmuls, and the number
-of FLOPS for an individual matmul is $2 \times \# \mathrm{parameters}$, then we
+of FLOPS for an individual matmul is $2 \times \# \mathrm{parameters}$
+, then we
 can get the total FLOPS for a forward pass through the transformer from just $2
-\cdot P$, where $P$ is the total number of parameters. Read the article
+\cdot P$, where $P$ is the number of parameters in the model<Sidenote>We ignore the embedding parameters, since those don't actually get matrix multiplied.</Sidenote>
+. Read the article
 [here](https://kipp.ly/transformer-inference-arithmetic/#flops-counting)
 to see this worked out [^1]
 
