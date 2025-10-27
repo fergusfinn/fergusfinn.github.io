@@ -66,7 +66,7 @@ export default function ThroughputCalculation() {
                 '0 ms (fully overlapped)'
               ) : (
                 <>
-                  <Tooltip label="non_overlapped_tokens">{formatNumber(nonOverlappedTokens, 0)}</Tooltip> tokens × <Tooltip label="2 FLOPs per param">2</Tooltip> × <Tooltip label="n_params">{formatLargeNumber(model.modelSize * 1e9)}</Tooltip> params ÷ <Tooltip label="FLOP/s">{formatLargeNumber(compute)}</Tooltip> FLOP/s ={' '}
+                  <Tooltip label="non_overlapped_tokens">{formatNumber(nonOverlappedTokens, 0)}</Tooltip> tokens × <Tooltip label="2 FLOPs per param">2</Tooltip> × <Tooltip label="P">{formatLargeNumber(model.modelSize * 1e9)}</Tooltip> params ÷ <Tooltip label="FLOP/s">{formatLargeNumber(compute)}</Tooltip> FLOP/s ={' '}
                   {nonOverlappedTime < 0.01 ? formatNumber(nonOverlappedTime, 4) : formatNumber(nonOverlappedTime)} ms
                 </>
               )

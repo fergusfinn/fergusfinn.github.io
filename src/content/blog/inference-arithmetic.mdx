@@ -1,5 +1,5 @@
 ---
-title: 'How fast can LLM inference go? '
+title: 'How fast can an LLM go? '
 description: |
   Comparing InferenceMAX to the hardware limits
 pubDate: 'Oct 22 2025'
@@ -25,7 +25,7 @@ import LatencyChart from '../../components/inference/LatencyChart.tsx'
 
 How fast can an LLM go? <Sidenote> Great resources for doing this kind of of thinking: [here](https://kipp.ly/transformer-inference-arithmetic/), [here](https://jax-ml.github.io/scaling-book/)</Sidenote>
 
-Reading this [article](https://inferencemax.semianalysis.com/) made me curious
+Reading these [benchmarks](https://inferencemax.semianalysis.com/)<Sidenote>Article [here](https://newsletter.semianalysis.com/p/inferencemax-open-source-inference)</Sidenote> made me curious
 as to how good our inference software is actually getting. Lets make some
 assumptions, and then work it through.
 
@@ -38,8 +38,9 @@ Pick a configuration from the selector on the left to change the values througho
 </div>
 
 <Sidenote unnumbered>
- Why do NVIDIA still do TFLOPs with sparsity? Is someone using this? Is
- everyone just going to be dividing their numbers by 2 from now until forever?
+ If you click on the datasheet links you always get FLOPS (with sparsity). Is
+ someone using this? Is everyone just going to be dividing their numbers by 2
+ from now until forever?
 </Sidenote>
 
 <GPUSpecsTable client:load />
@@ -58,14 +59,12 @@ NVIDIA are 2x fp16 flops.</Sidenote> values from HBM to & from the compute
 units. This scaling dominates everything else (softmaxes, norms, etc.
 are all linear).
 
-Since almost all the models the parameters are in the matmuls, and the number
+Since almost all the model's parameters are in the matmuls, and the number
 of FLOPS for an individual matmul is $2 \times \# \mathrm{parameters}$, then we
 can get the total FLOPS for a forward pass through the transformer from just $2
 \cdot P$, where $P$ is the total number of parameters. Read the article
-[here](https://kipp.ly/transformer-inference-arithmetic/#flops-counting)<Sidenote>The
-calculation in that article is for various 2022 era transformers, but LLama-3
-isn't all that different. The only meaningful change is GQA, but that doesn't
-change the formula</Sidenote> to see this worked out.
+[here](https://kipp.ly/transformer-inference-arithmetic/#flops-counting)
+to see this worked out [^1]
 
 There are two meaningful bottlenecks that well-optimized GPU software should
 hit: we can be **memory bandwidth bound**, or we can be **compute bound**. GPUs
@@ -80,7 +79,7 @@ $B$ here is doing double duty in this article - below its the batch size
 passing through the transformer (i.e. number of sequences), here its the
 number of tokens passing through the matmul. Also, the approximation comes
 from $D \gg B$. </Sidenote> matmul to be compute bound, we need the
-arithmetic intensity to exceed the accelerator's compute to bandwidth ratio:
+[arithmetic intensity](https://en.wikipedia.org/wiki/Roofline_model) to exceed the accelerator's compute to bandwidth ratio:
 
 $$
 \frac{2BDF}{n_\mathrm{bytes}(BD + DF + BF)} \approx \frac{2B}{n_\mathrm{bytes}} \geq \frac{\text{accelerator compute}}{\text{accelerator bandwidth}}
@@ -101,8 +100,9 @@ Try changing the accelerator to see how this threshold changes.
 Transformer inference has two phases: prefill, where we process the input
 prompt and generate KV cache, and then decode, where we generate output tokens
 one at a time. Prefilling happens in parallel across all the input tokens. For
-all the configurations (change the sequence length selector and see),
-prefilling is compute bound, even without batching across multiple requests.
+all the configurations in the
+[benchmark](https://inferencemax.semianalysis.com/), prefilling is compute
+bound, even without batching across multiple requests.
 
 Compute bound means that we're bounded by the FLOP/s of the accelerator: i.e.
 its calculating just as hard as it can.
@@ -126,7 +126,7 @@ transfers to the accelerator memory bandwidth.
 
 There are two things we need to transfer for each decode step: the weights and
 the KV cache. For each token, we store both a key and value vector for each
-layer. The sequences run from ISL to ISL+OSL tokens, so we'll assume that the
+layer. The sequences run from ISL to ISL+OSL<Sidenote>ISL=Input Sequence Length and OSL=Output Sequence Length. This calculation is slightly wrong, because we transfer $1$ token's worth of KV cache for the first step, $2$ tokens worth of KV cache for the second step, etc, so average memory transferred per step over $n$ steps goes as $\sum_i^ni/2 \approx n^2/2$. But its good enough.</Sidenote> tokens, so we'll assume that the
 average sequence length is in the middle.
 
 <DecodeCalculation client:load />
@@ -164,7 +164,7 @@ ongoing decodes.
 This means in principle we can use some of the idle compute during decodes to
 prefill new sequences. How much we can get 'for free' depends on how much spare
 compute across all the decodes that we do. See the
-[appendix](#appendix-chunked-prefilling) for a broader discussion of how this
+footnote[^2] for a broader discussion of how this
 changes the maths. Toggle the 'Chunked Prefilling' checkbox to see how this
 changes the theoretical throughput.
 
@@ -180,16 +180,17 @@ theoretical work that the system has to do. In practise, there are overheads:
 2. **Imperfect comms overlapping**: We haven't talked about comms at all -
    we've been implicitly assuming that all data transfers - both between
    accelerators, and from HBM to compute units - for an op happen perfectly
-   asynchronously with compute. This definitely doesn't always happen.
+   asynchronously with compute. This definitely doesn't (and potentially can't)
+   always happen.
 3. **Chunked prefilling overheads**: There's more memory movement with chunked
-   prefilling than we've accounted for. See the appendix for more details.
-4. **Achievable numbers**: The maximum achievable numbers for the hardware are
-   usually lower than the numbers on the datasheet. See
+   prefilling than we've accounted for. 4. **Achievable numbers**: The maximum
+   achievable numbers for the hardware are usually lower than the numbers on the
+   datasheet. See
    [here](https://github.com/stas00/ml-engineering/tree/master/compute/accelerator#maximum-achievable-flops)
    for a great attempt to actually measure this, or
    [this](https://www.thonking.ai/p/strangely-matrix-multiplications) for the
    surprising sorts of things that can matter.
-5. Lots of other stuff: thermals, bugs, cosmic rays, etc.
+4. Lots of other stuff: thermals, bugs, cosmic rays, etc.
 
 With that all in mind, how do real world numbers compare?
 
@@ -212,7 +213,7 @@ queue to achieve maximum throughput.
 ### Across configurations
 
 Toggle the dropdowns on the right to change the X axis. Changing the value not
-on the x axis (in the configuration selector on the left) will change the lines
+on the X axis (in the configuration selector on the left) will change the lines
 shown.
 
 #### Throughput
@@ -286,60 +287,67 @@ software and hardware improve.
 
 ---
 
-## Appendix: Chunked Prefilling
+[^1]:
+    It's common to ignore the attention FLOPs, but after publishing this it was
+    pointed out to me this doesn't quite work here. Self-attention has $4BSTD$
+    FLOPS, where S is the number of new tokens, and T is the number of previous
+    tokens to attend to. It transfers $2n_{\mathrm{bytes}}(BSD + BTD)$ bytes. So
+    the arithmetic intensity at prefill time (i.e. $S=T$) is $O(T)$ and at decode
+    time ($S=1$) is $O(1)$. This makes where to put attention on the memory-bound
+    vs. flops bound spectrum pretty easy to figure - it's FLOPs bound at prefill
+    time, and memory bound at decode time. So we should include the attention FLOPs
+    in the prefill calculation.
 
-vLLM's default scheduler (as of v0.10.0) uses **chunked prefilling**. The idea
-is that prefills and decodes have complementary resource usage: prefills are
-compute bound (wasting memory bandwidth), while decodes are memory bandwidth
-bound (wasting compute). By mixing them in the same batch, we can increase
-utilization. To do this, we need to write kernels that can handle both at the
-same time, but kindly somebody did
-[it](https://github.com/flashinfer-ai/flashinfer).
+[^2]:
+    vLLM's default scheduler (as of v0.10.0) uses **chunked prefilling**. The idea
+    is that prefills and decodes have complementary resource usage: prefills are
+    compute bound (wasting memory bandwidth), while decodes are memory bandwidth
+    bound (wasting compute). By mixing them in the same batch, we can increase
+    utilization. To do this, we need to write kernels that can handle both at the
+    same time, but kindly somebody did
+    [it](https://github.com/flashinfer-ai/flashinfer).
 
-The scheduler works as follows: at each step, we have a token budget
-(`max_num_batched_tokens`). Ongoing decodes take priority, using 1 token per
-sequence. Any remaining budget is filled with prefill tokens from incoming
-requests. If a prefill is too large to fit entirely, it gets split into chunks
-that are processed across multiple steps.
+    The scheduler works as follows: at each step, we have a token budget
+    (`max_num_batched_tokens`). Ongoing decodes take priority, using 1 token per
+    sequence. Any remaining budget is filled with prefill tokens from incoming
+    requests. If a prefill is too large to fit entirely, it gets split into chunks
+    that are processed across multiple steps.
 
-In steady state, we have all the concurrent users continuously decoding. When a
-sequence completes, a new request will arrive to take its place. That new
-request will be prefilled (potentially in chunks) alongside the ongoing decodes.
+    In steady state, we have all the concurrent users continuously decoding. When a
+    sequence completes, a new request will arrive to take its place. That new
+    request will be prefilled (potentially in chunks) alongside the ongoing decodes.
+    In order not to interrupt decodes, we require the chunk size to be equal to:
 
-In order not to interrupt decodes, we require the chunk size to be equal to:
+    $$
+    \mathrm{Chunk~size} = \mathrm{Compute~bound~threshold}-B
+    $$
 
-$$
-\mathrm{Chunk~size} = \mathrm{Compute~bound~threshold}-B
-$$
+    The condition here is that decode batches are made perfectly compute bound by the
+    addition of prefill chunks <Sidenote>
+    How good is this modelling? Mixed. The big thing that's missing is that
+    chunked prefilling incurs extra memory transfer, which will slow down the
+    decodes regardless of the compute threshold. In fact, it incurs _more_ memory
+    transfer (in total) than doing prefill and decode separately, since some parts
+    of KV cache have to be transferred multiple times. For example, for an $ISL$
+    of 8192 tokens and a chunk size of 1024, the KV cache for the first 1024
+    tokens is transferred 7 times. In principle it's $O(ISL^2)$ extra memory
+    transfer, but the chunk size brings down the scaling by a lot. </Sidenote>.
+    If this is the case, then we can do $OSL$ prefill chunks 'for free' in parallel with the decodes. There are:
 
-The condition here is that decode batches are made perfectly compute bound by the
-addition of prefill chunks <Sidenote>
-How good is this modelling? Mixed. The big thing that's missing is that
-chunked prefilling incurs extra memory transfer, which will slow down the
-decodes regardless of the compute threshold. In fact, it incurs _more_ memory
-transfer (in total) than doing prefill and decode separately, since some parts
-of KV cache have to be transferred multiple times. For example, for an $ISL$
-of 8192 tokens and a chunk size of 1024, the KV cache for the first 1024
-tokens is transferred 7 times. In principle it's $O(ISL^2)$ extra memory
-transfer, but the chunk size brings down the scaling by a lot. </Sidenote>.
+    $$
+    B \times (ISL/\mathrm{Chunk~size})
+    $$
 
-If this is the case, then we can do $OSL$ prefill chunks 'for free' in parallel
-with the decodes. There are:
+    chunks to process in total. So the number of non-overlapped prefill _tokens_ is:
 
-$$
-B \times (ISL/\mathrm{Chunk~size})
-$$
+    $$
+    \begin{aligned}
+    (B \times (ISL/\mathrm{Chunk~size}) - OSL) \times \mathrm{Chunk~size} \\
+    B \times ISL - OSL \times \mathrm{Chunk~size} \\
+    B \times (ISL + OSL) - OSL \times \mathrm{Compute~bound~threshold}
+    \end{aligned}
+    $$
 
-chunks to process in total. So the number of non-overlapped prefill _tokens_ is:
+    For the currently selected configuration:
 
-$$
-\begin{aligned}
-(B \times (ISL/\mathrm{Chunk~size}) - OSL) \times \mathrm{Chunk~size} \\
-B \times ISL - OSL \times \mathrm{Chunk~size} \\
-B \times (ISL + OSL) - OSL \times \mathrm{Compute~bound~threshold}
-\end{aligned}
-$$
-
-For the currently selected configuration:
-
-<NonOverlappedPrefillTokens client:load />
+    <NonOverlappedPrefillTokens client:load />

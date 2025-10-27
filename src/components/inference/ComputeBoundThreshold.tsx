@@ -20,7 +20,7 @@ export default function ComputeBoundThreshold() {
         <div class="leading-relaxed">
           <div class="text-gray-600 dark:text-gray-400 mb-1 text-sm">Threshold for matmuls to be compute bound:</div>
           <div class="text-base" style="font-family: var(--font-math)">
-            B ≥ <Tooltip label="FLOP/s">{formatLargeNumber(compute)}</Tooltip> ÷ (<Tooltip label="bandwidth (bytes/s)">{formatLargeNumber(bandwidth)}</Tooltip> ÷ <Tooltip label="bytes_per_param">{config.bytesPerParameter}</Tooltip>) ÷ <Tooltip label="2 ops per param">2</Tooltip> ={' '}
+            B ≥ <Tooltip label="FLOP/s">{formatLargeNumber(compute)}</Tooltip> ÷ (<Tooltip label="bandwidth (bytes/s)">{formatLargeNumber(bandwidth)}</Tooltip> ÷ <Tooltip label="n_bytes">{config.bytesPerParameter}</Tooltip>) ÷ <Tooltip label="2 ops per param">2</Tooltip> ={' '}
             <span class="font-bold text-blue-700 dark:text-blue-400">{threshold} tokens</span>
           </div>
         </div>

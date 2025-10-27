@@ -123,7 +123,7 @@ export default function BenchmarkComparison() {
                   </td>
                 </tr>
                 <tr class="border-b border-gray-200 dark:border-gray-800">
-                  <td class="py-2 px-2">Throughput/GPU</td>
+                  <td class="py-2 px-2">Throughput/GPU (output)</td>
                   <td class="text-right py-2 px-2">{formatNumber(calcThroughput, 0)} tok/s</td>
                   <td class="text-right py-2 px-2">{formatNumber((matchingRow.Conc / (matchingRow['TPOT (ms)'] / 1000)) / matchingRow.TP, 0)} tok/s</td>
                   <td class="text-right py-2 px-2">

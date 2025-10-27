@@ -141,10 +141,25 @@ export const computeBoundThreshold = computed(
 )
 
 // Prefill calculations
-export const prefillFLOPs = computed(
+export const attentionFLOPs = computed(
+  [configStore, modelStore],
+  (config, model) => {
+    // Attention FLOPs for prefill: 4 × ISL² × D × L
+    return 4 * Math.pow(config.inputSeqLength, 2) * model.hiddenSize * model.numLayers
+  }
+)
+
+export const matmulFLOPs = computed(
   [configStore, modelStore],
   (config, model) => {
     return config.inputSeqLength * 2 * model.modelSize * 1e9
+  }
+)
+
+export const prefillFLOPs = computed(
+  [matmulFLOPs, attentionFLOPs],
+  (matmul, attention) => {
+    return matmul + attention
   }
 )
 
@@ -329,7 +344,7 @@ export function formatLargeNumber(num: number): string {
     // Use E notation for large numbers, show 2 decimal places
     const exponent = Math.floor(Math.log10(num))
     const mantissa = num / Math.pow(10, exponent)
-    return `${mantissa.toFixed(2)}E${exponent}`
+    return `${mantissa.toFixed(2)}e${exponent}`
   }
   return num.toFixed(2)
 }
