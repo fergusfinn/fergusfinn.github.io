@@ -31,7 +31,7 @@ export default function DecodeCalculation() {
         <div class="leading-relaxed">
           <div class="text-gray-600 dark:text-gray-400 mb-1 text-sm">KV cache per token:</div>
           <div class="text-base" style="font-family: var(--font-math)">
-            <Tooltip label="Both K and V">2</Tooltip> × <Tooltip label="n_layers">{model.numLayers}</Tooltip> × <Tooltip label="n_kv_heads">{model.numKVHeads}</Tooltip> × <Tooltip label="head_dim">{model.headDim}</Tooltip> × <Tooltip label="bytes_per_param">{config.bytesPerParameter}</Tooltip> = {formatLargeNumber(cachePerToken)} bytes
+            <Tooltip label="Both K and V">2</Tooltip> × <Tooltip label="n_layers">{model.numLayers}</Tooltip> × <Tooltip label="n_kv_heads">{model.numKVHeads}</Tooltip> × <Tooltip label="head_dim">{model.headDim}</Tooltip> × <Tooltip label="n_bytes">{config.bytesPerParameter}</Tooltip> = {formatLargeNumber(cachePerToken)} bytes
           </div>
         </div>
         <div class="leading-relaxed">
@@ -52,7 +52,7 @@ export default function DecodeCalculation() {
         </div>
         <div class="leading-relaxed">
           <div class="text-gray-600 dark:text-gray-400 mb-1 text-sm">Model weights:</div>
-          <div class="text-base" style="font-family: var(--font-math)"><Tooltip label="n_params">{formatLargeNumber(model.modelSize * 1e9)}</Tooltip> × <Tooltip label="bytes_per_param">{config.bytesPerParameter}</Tooltip> = {formatLargeNumber(model.modelSize * 1e9 * config.bytesPerParameter)} bytes</div>
+          <div class="text-base" style="font-family: var(--font-math)"><Tooltip label="P">{formatLargeNumber(model.modelSize * 1e9)}</Tooltip> × <Tooltip label="n_bytes">{config.bytesPerParameter}</Tooltip> = {formatLargeNumber(model.modelSize * 1e9 * config.bytesPerParameter)} bytes</div>
         </div>
         <div class="leading-relaxed">
           <div class="text-gray-600 dark:text-gray-400 mb-1 text-sm">Total bytes per decode step:</div>

@@ -1,0 +1,119 @@
+---
+title: 'Inference Comms arithmetic'
+description: |
+  Pipeline parallelism for inference
+pubDate: 'Oct 24 2025'
+slug: pipeline-parallelism-for-inference
+index: false
+---
+
+import Sidenote from '../../components/Sidenote.astro'
+
+In the last [post](https://fergusfinn.com/blog/inference-arithmetic), we did
+some arithmetic for figuring out the theoretical maximum throughput of model
+inference in the [inferenceMAX](https://inferencemax.semianalysis.com/)
+benchmarks. We neglected the details of how communication between different
+accelerators works completely, mostly out of laziness.
+
+There are lots of ways to distribute LLM inference across multiple
+accelerators.
+
+Assume the model weights take up $K$GB. Assume we're serving $B$ concurrent
+users, with $ISL$ input tokens and $OSL$ output tokens. Call the KV cache per
+sequence at time $t$, $KV_i(t)$, so the total KV cache for processing $B$
+sequences is $\sum_i^B KV_i(t)$. Let the total number of model parameters be
+$P$, and the total number of FLOPs then roughly $2P$ (see the
+[last](https://fergusfinn.com/blog/inference-arithmetic) post for more info).
+Call the number of accelerators that we're parallelising across $M$. Assume our
+$B$ concurrent users result in $S(t)$ tokens to be processed at time $t$.
+
+## Data Parallel
+
+LLM inference is done in inference servers, and data parallel (at inference
+time) is just the name for the way we do horizontal parallelism for normal
+servers - i.e, we just load balance each request across the replicas.
+
+We might choose to be clever and 'LLM aware' in how we load balance - i.e.
+figure out KV cache utilizations before routing, or route to replicas with a
+hot prefix cache. This strategy stacks on top of the strategies below - once we
+exhaust anything cleverer, we fall back to just replicating copies of that
+clever configuration.
+
+### GPU VRAM Usage
+
+For the model weights: $K$GB. (i.e. the same)
+
+For the KV cache: $\sum_i^{B/M}KV_i(t)$. (i.e. roughly smaller by a factor of $M$).
+
+### Comms
+
+None!
+
+## Tensor Parallel
+
+For Tensor parallelism, we split each matrix across $M$ accelerators, and then
+(for the most part) keep the full activations replicated on each accelerator as we
+pass through the model. To perform a matmul, each accelerator does computation
+with their model 'shard', and then the results are communicated and aggregated
+so that the result appears on each accelerator, ready for the next
+operation.<Sidenote>In practise, we orchestrate things so that larger blocks of
+the transformer can be computed without communication - so for example, you
+shard your attention matrices across the head dimension, so that you can
+perform attention on the sharded results before applying the next matmul and
+re-aggregating.</Sidenote>
+
+The reason that this is tricky is that bandwidth inside the (i.e. the bandwidth
+from the HBM to the compute units) is much higher than the bandwidth
+between the accelerators<Sidenote>That's why they call it 'high bandwidth
+memory'</Sidenote>.
+
+The result is you have to be careful about how you 'shard' your model. The details of how we split the weights up and perform the parallel
+computations have been explained a lot
+elsewhere<Sidenote>[this](https://lightning.ai/docs/pytorch/stable/advanced/model_parallel/tp.html) one is good, also this [one](https://danieldk.eu/Tensor-Parallelism).</Sidenote>
+
+### GPU VRAM Usage
+
+For the model weights: $K/M$GB. (i.e. smaller by a factor of $M$).
+
+For the KV cache: $(\sum_i^{B}KV_i(t))/M$. (i.e. smaller by a factor of $M$).
+
+### Comms
+
+Unlike data parallelism, where different accelerators handle different
+sequences, we're bringing all the accelerators to bear on the same sequences.
+The drawback is that the accelerators need to communicate with each other to do
+this. We'll get to the upsides later.
+
+Total amount transferred between the accelerators across each inter-accelerator
+link<Sidenote>This same number gets transferred in both directions across the link
+(which might be intra-node - PCIe, NVLINK, etc, or inter-node, but you'd
+probably do another parallelism strategy across nodes). [This](https://andrew.gibiansky.com/blog/machine-learning/baidu-allreduce/) is nice for figuring out the details of the comms when doing tensor parallelism </Sidenote>
+
+$$
+4 S \times (M-1) d_\mathrm{model} /M~\mathrm{bytes}
+$$
+
+Total amount transferred to the accelerators across each HBM-compute link:
+
+$$
+(K + \sum_i^{B}KV_i(t))/M
+$$
+
+Total amount of compute to be performed per accelerator
+
+$$
+2P / M
+$$
+
+Since each sequence has all the accelerators working on it at once, tensor
+parallelism can also improve the latency of inferencing large models.
+
+## Pipeline Parallel
+
+For pipeline parallelism, we split the model lengthwise - i.e. we put some
+number of layers on each accelerator, and then pass activations through
+accelerator $1$, accelerator $2$, in series. This doesn't sound like
+parallelism, but if you think about it - accelerator $1$ becomes idle as soon
+as the activations are being computed on accelerator $2$, so we can use it for
+more sequences. It means that there are 'bubbles' when starting and finishing
+running requests through the pipeline, where some number of GPUs are idle.
