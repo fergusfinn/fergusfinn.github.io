@@ -11,6 +11,26 @@ export const SITE_DESCRIPTION =
 export const SITE_BASE = ''
 
 export const SocialLinks = [
+  {
+    name: 'GitHub',
+    url: 'https://github.com/fergusfinn',
+    icon: 'mdi:github',
+  },
+  {
+    name: 'LinkedIn',
+    url: 'https://www.linkedin.com/in/fergusfinn/',
+    icon: 'mdi:linkedin',
+  },
+  {
+    name: 'Google Scholar',
+    url: 'https://scholar.google.com/citations?user=tAp5bZ8AAAAJ&hl=en',
+    icon: 'mdi:school',
+  },
+  {
+    name: 'Doubleword',
+    url: 'https://www.doubleword.ai/about-doubleword',
+    icon: 'mdi:domain',
+  },
 ]
 
 export const WebsiteLinks = [

@@ -9,6 +9,7 @@ import rehypeFigureTitle from 'rehype-figure-title'
 import { rehypeAccessibleEmojis } from 'rehype-accessible-emojis'
 import { remarkReadingTime } from './src/plugins/remark-reading-time.mjs'
 import { remarkModifiedTime } from './src/plugins/remark-modified-time.mjs'
+import { remarkSidenotes } from './src/plugins/remark-sidenotes.mjs'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import rehypeSlug from 'rehype-slug'
@@ -35,7 +36,7 @@ export default defineConfig({
     },
   },
   markdown: {
-    remarkPlugins: [remarkReadingTime, remarkModifiedTime, remarkMath],
+    remarkPlugins: [remarkSidenotes, remarkReadingTime, remarkModifiedTime, remarkMath],
     rehypePlugins: [
       rehypeFigureTitle,
       rehypeAccessibleEmojis,

@@ -27,10 +27,12 @@ import 'katex/dist/katex.min.css'
 		/>
 	</head>
 	<body
-		class="text-foreground bg-background font-light dark:text-foreground-dark dark:bg-background-dark transition-colors"
+		class="text-foreground bg-background font-light dark:text-foreground-dark dark:bg-background-dark transition-colors min-h-screen flex flex-col"
 	>
 		<Navbar title={SITE_TITLE} />
-		<slot />
+		<div class="flex-1">
+			<slot />
+		</div>
 		<Footer />
 	</body>
 </html>

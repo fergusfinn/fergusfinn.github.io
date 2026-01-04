@@ -1,5 +1,5 @@
 ---
-import { WebsiteLinks } from '../consts'
+import { WebsiteLinks, SocialLinks } from '../consts'
 import LogoSVG from '../assets/logo.svg'
 import { Icon } from 'astro-icon/components'
 ---
@@ -8,23 +8,21 @@ import { Icon } from 'astro-icon/components'
 	<div
 		class="app-container grid md:grid-cols-2 gap-12 py-16 border-t-2 border-foreground/50 dark:border-foreground-dark/50"
 	>
-		<div>
+		<div class="flex items-center gap-6">
 			<a href="/" class="block w-fit" aria-label="Home">
 				<LogoSVG height={36} width={36} />
 			</a>
-		</div>
-		<div>
-			<h3 class="font-semibold text-2xl">Links</h3>
-			<div class="flex flex-wrap gap-4 mt-4">
+			<div class="flex flex-wrap gap-4">
 				{
-					WebsiteLinks.filter((link) => link.name !== 'Home').map((link) => (
+					SocialLinks.map((link) => (
 						<a
-							class="text-lg"
 							href={link.url}
 							target="_blank"
 							rel="noopener noreferrer"
+							class="hover:opacity-70 transition-opacity"
+							aria-label={link.name}
 						>
-							{link.name}
+							<Icon name={link.icon} class="w-6 h-6" />
 						</a>
 					))
 				}
@@ -32,11 +30,26 @@ import { Icon } from 'astro-icon/components'
 					href="/rss.xml"
 					target="_blank"
 					rel="noopener noreferrer"
-					class="text-lg"
+					class="hover:opacity-70 transition-opacity"
 					aria-label="RSS Feed"
 				>
 					<Icon name="mdi:rss" class="w-6 h-6" />
 				</a>
+			</div>
+		</div>
+		<div>
+			<h3 class="font-semibold text-2xl">Links</h3>
+			<div class="flex flex-wrap gap-4 mt-4">
+				{
+					WebsiteLinks.filter((link) => link.name !== 'Home').map((link) => (
+						<a
+							class="text-lg hover:opacity-70 transition-opacity"
+							href={link.url}
+						>
+							{link.name}
+						</a>
+					))
+				}
 			</div>
 		</div>
 	</div>

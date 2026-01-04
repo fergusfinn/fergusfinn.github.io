@@ -86,12 +86,12 @@ that have been battle-tested across applications. We can harness it by treating
 the LLM not as an independent agent with goals but as a "smart" processing
 unit, one that can do fuzzy comparisons, semantic aggregation, complex
 reasoning rather than just arithmetic, and then adapt the classical parallel
-algorithms to use these capabilities[^1].
+algorithms to use these capabilities[>1].
 
-[^1]:
-    Agency doesn't have to disappear as a goal. these algorithmic workflows
-    can be called by orchestrator agents, or the LLM processing units can take
-    up larger and larger chunks of the problem as capabilities keep climbing.
+[>1]:
+Agency doesn't have to disappear as a goal. these algorithmic workflows
+can be called by orchestrator agents, or the LLM processing units can take
+up larger and larger chunks of the problem as capabilities keep climbing.
 
 ## Two primitives for coordination
 
@@ -102,7 +102,7 @@ dual primitives:
 
 A fold takes a collection of items and reduces them to a single result by repeatedly applying a combining function. The sequential version walks through a list, maintaining an accumulator, and at each step combines the accumulator with the next element. But the sequential version has $O(n)$ depth, which means $n$ round trips to the LLM if that's your combining function, and that's often too slow.
 
-The parallel version achieves $O(\log n)$ depth by restructuring the computation as a tree. Instead of combining elements left-to-right, you pair them up and combine each pair in parallel, then pair up the results and combine those, and so on until you have a single result. This is sometimes called a parallel reduction[^2]. If you have $n$ items and a combining function, you can get down to $\log n$ sequential LLM calls by running $n/2$, then $n/4$, then $n/8$ calls in parallel at each level.
+The parallel version achieves $O(\log n)$ depth by restructuring the computation as a tree. Instead of combining elements left-to-right, you pair them up and combine each pair in parallel, then pair up the results and combine those, and so on until you have a single result. This is sometimes called a parallel reduction[>2]. If you have $n$ items and a combining function, you can get down to $\log n$ sequential LLM calls by running $n/2$, then $n/4$, then $n/8$ calls in parallel at each level.
 
 The catch is that this only works cleanly if your combining function is [associative](https://en.wikipedia.org/wiki/Associative_property): `combine(combine(a, b), c)` needs to equal `combine(a, combine(b, c))`. We'll come back to this.
 
@@ -126,11 +126,11 @@ async def fold(items: list[T], combine: Callable[[T, T], Awaitable[T]]) -> T:
 
 Each level of recursion halves the list, so we get $O(\log n)$ depth. At each level, all the `combine` calls run in parallel via `asyncio.gather`. The `combine` function is where the LLM does its work.
 
-[^2]: The [prefix scan](https://en.wikipedia.org/wiki/Prefix_sum) is a related operation that computes all the partial reductions, not just the final result. It requires extra work to propagate intermediate values back through the tree. The parallel reduction we're describing here is simpler: you only need the final answer.
+[>2]: The [prefix scan](https://en.wikipedia.org/wiki/Prefix_sum) is a related operation that computes all the partial reductions, not just the final result. It requires extra work to propagate intermediate values back through the tree. The parallel reduction we're describing here is simpler: you only need the final answer.
 
 ### [Unfold](https://en.wikipedia.org/wiki/Anamorphism): decomposing a single item
 
-Unfold is the dual of fold: where fold takes many items and produces one, unfold takes one item and produces many. You start with a seed value and a decomposition function that splits it into subproblems, and you keep splitting until you hit base cases. The parallel version expands all children at each level simultaneously, which again gives you $O(\log n)$ depth if the tree is balanced[^3].
+Unfold is the dual of fold: where fold takes many items and produces one, unfold takes one item and produces many. You start with a seed value and a decomposition function that splits it into subproblems, and you keep splitting until you hit base cases. The parallel version expands all children at each level simultaneously, which again gives you $O(\log n)$ depth if the tree is balanced[>3].
 
 [Quicksort](https://en.wikipedia.org/wiki/Quicksort) is a good example. The decomposition function takes a list and a pivot, partitions the list into elements less than and greater than the pivot, and returns the two partitions. Unfold then recursively expands both partitions in parallel. The work is $O(n)$ comparisons at each level since everything gets compared to something, but because left and right subtrees expand simultaneously, the depth is $O(\log n)$ for a balanced partition.
 
@@ -156,24 +156,23 @@ The `decompose` function returns `None` for base cases (leaves) or a list of
 subproblems to expand further. All children at each level expand in parallel,
 giving $O(\log n)$ depth for balanced trees.
 
-[^3]:
-    "Balanced" here means the decomposition splits things roughly evenly at
-    each step. If your decomposition function consistently puts most items on
-    one side and few on the other, you end up with $O(n)$ depth instead of $O(\log
-n)$. For sorting, this depends on pivot selection: a pivot near the median
-    gives balanced partitions, while a pivot near the minimum or maximum gives
-    degenerate ones.
+[>3]:
+"Balanced" here means the decomposition splits things roughly evenly at
+each step. If your decomposition function consistently puts most items on
+one side and few on the other, you end up with $O(n)$ depth instead of $O(log n)$. For sorting, this depends on pivot selection: a pivot near the median
+gives balanced partitions, while a pivot near the minimum or maximum gives
+degenerate ones.
 
 ### [Hylomorphism](<https://en.wikipedia.org/wiki/Hylomorphism_(computer_science)>): divide and conquer
 
 A hylomorphism is an unfold followed by a fold: you decompose a problem into
-subproblems, solve the base cases, and then aggregate the results back up[^4].
+subproblems, solve the base cases, and then aggregate the results back up[>4].
 This is the structure of [divide-and-conquer](https://en.wikipedia.org/wiki/Divide-and-conquer_algorithm) algorithms, and it turns out to be
 surprisingly general.
 
 [Mergesort](https://en.wikipedia.org/wiki/Merge_sort) fits this pattern well: unfold splits the list in half recursively
 until you hit single elements, and then fold merges pairs back together using
-the LLM comparator[^5]. Quicksort is a hylomorphism too, though the fold step
+the LLM comparator[>5]. Quicksort is a hylomorphism too, though the fold step
 is just concatenation since the partitioning already establishes order.
 
 The pattern generalizes beyond sorting. You could structure question-answering
@@ -184,9 +183,9 @@ into files or functions and then combining per-file assessments. The
 decomposition and aggregation functions change, but the computational structure
 stays the same.
 
-[^4]: The name comes from [category theory](https://en.wikipedia.org/wiki/Category_theory), where a hylomorphism is defined as the composition of an [anamorphism](https://en.wikipedia.org/wiki/Anamorphism) (unfold) and a [catamorphism](https://en.wikipedia.org/wiki/Catamorphism) (fold). You don't need the category theory to use the pattern, but the names are evocative once you know them.
+[>4]: The name comes from [category theory](https://en.wikipedia.org/wiki/Category_theory), where a hylomorphism is defined as the composition of an [anamorphism](https://en.wikipedia.org/wiki/Anamorphism) (unfold) and a [catamorphism](https://en.wikipedia.org/wiki/Catamorphism) (fold). You don't need the category theory to use the pattern, but the names are evocative once you know them.
 
-[^5]: Sorting via mergesort is $O(n \log n)$ because it's comparative. If we wanted $O(n)$ we could do something like [bucket sort](https://en.wikipedia.org/wiki/Bucket_sort), where the LLM classifies each item into a bucket in a single pass.
+[>5]: Sorting via mergesort is $O(n log n)$ because it's comparative. If we wanted $O(n)$ we could do something like [bucket sort](https://en.wikipedia.org/wiki/Bucket_sort), where the LLM classifies each item into a bucket in a single pass.
 
 ## Instantiations
 
@@ -395,13 +394,13 @@ mergesort), but embeddings do comparisons via cheap vector math while LLM
 comparators require API calls. The tradeoff is cost vs quality: embeddings are
 fast but the similarity metric is fixed, while LLMs can reason about relevance,
 understand context, and apply judgment. Whether that's worth the cost depends
-on the application[^6].
+on the application[>6].
 
-[^6]:
-    Embeddings also enable approximate nearest neighbor techniques like [HNSW](https://en.wikipedia.org/wiki/Hierarchical_navigable_small_world)
-    that achieve sublinear query time via pre-computed indexes. These don't
-    translate to LLM comparators: the comparison is query-dependent, you can't
-    pre-index, and there's no guarantee of transitivity to prune search.
+[>6]:
+Embeddings also enable approximate nearest neighbor techniques like [HNSW](https://en.wikipedia.org/wiki/Hierarchical_navigable_small_world)
+that achieve sublinear query time via pre-computed indexes. These don't
+translate to LLM comparators: the comparison is query-dependent, you can't
+pre-index, and there's no guarantee of transitivity to prune search.
 
 ### Deep Research as Full Hylomorphism
 
@@ -451,12 +450,6 @@ structure. LLMs don't need to be pure comparators operating on base cases—they
 can sort lists of length $k$, or summarize chunks of size $m$, folding within
 their own contexts. As capabilities improve, we can push more work into each
 node and less into the network. The primitives stay the same but the granularity
-shifts[^7].
+shifts.
 
 More on applying these ideas soon.
-
-[^7]:
-    Human organizations work this way too. Armies and corporations build
-    hierarchies that unfold work across levels and fold results back up. But we
-    can't spawn new humans on demand, so we reuse the same structures for many
-    problems rather than instantiating a fresh fold/unfold chain for each one.
