@@ -1,5 +1,5 @@
 ---
-title: 'Parallel Primitives for Multi-Agent LLMs'
+title: 'Parallel Primitives for Multi-Agent Workflows'
 description: |
   Exploring coordination patterns from parallel computing for multi-agent LLM systems
 pubDate: 'Dec 31 2025'
