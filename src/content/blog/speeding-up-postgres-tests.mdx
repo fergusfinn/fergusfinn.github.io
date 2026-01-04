@@ -1,0 +1,134 @@
+---
+title: 'speeding up postgres tests'
+description: |
+  Some content
+pubDate: 'Sep 22 2025'
+index: false
+---
+
+import Sidenote from '../../components/Sidenote.astro'
+
+If you speed something up by 20%, you did a good job. If you speed something up
+by 1000%, somebody did a bad job.
+
+We sped up our postgres test suite by a factor of 2.
+
+## What
+
+The Doubleword [Control Layer](https://github.com/doublewordai/control-layer)
+is an AI gateway, written in rust. At its core, its a simple CRUD app - it
+interacts with a postgres database, and exposes a REST API. We have more than
+500 tests, covering everything from creating users, to checking that the config
+file is parsed properly.
+
+We use rust's [sqlx](https://github.com/launchbadge/sqlx) library. If you're
+not familiar, it lets you write raw SQL that gets checked against a database
+schema at compile time.
+
+## Why
+
+We want to work fast. We're used to dealing with rust compile times. But
+compile times are incremental, & test times aren't. So we need to speed up the
+tests.
+
+## How
+
+Each of our tests (roughly) looks like the following:
+
+```rust
+#[sqlx::test]
+async fn my_test(pool: &PgPool) -> Result<()> {
+    let application = setup_application(pool).await;
+    // testing logic with application
+}
+```
+
+This `#[sqlx::test]` macros is a nice affordance provided by sqlx. You run your
+tests against a live database (passed in via the `DATABASE_URL`) environment
+variable. The macro maintains a global connection pool (with $20$ connections)
+to that database. To setup each test, it creates a new database with a random
+name, and runs your migrations. Then, your test gets $5$ connections in a
+sub-pool to do with as it will.
+
+We have $500$ or so of these tests. They run in parallel, $4$ at a time.
+
+We run postgres in docker, with the following invocation. We develop on mac
+mostly, but the CI runs on ubuntu.
+
+```bash
+docker run --name postgresql \
+  -e POSTGRES_PASSWORD=password \
+  -p $5432:5432 \
+  -v postgres-data:/var/lib/postgresql/data \
+  -d postgres:latest
+```
+
+### Baseline
+
+First, measure. The easiest way to get a quick and dirty performance
+measurement on unix is with the `time` command,
+
+```bash
+cargo test
+```
+
+Our first result is...
+
+```
+test result: ok. 549 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 41.70s
+```
+
+painful. $41.70$ seconds! (we should run this multiple times really, but eh).
+What first?
+
+### Rules of thumb
+
+First of all, how fast can we get. Some fixed points:
+
+1. We don't want to change the level of database isolation - we still want to
+   create and delete a database for each test. 2.
+2. We don't want to change the business logic in the tests themselves.
+
+How long is each test taking? By default, we have `RUST_TEST_THREADS` set to
+$4$. So, for $549$ tests, assuming perfect parallelism, we have to run $\approx
+137$ in series. So each test is taking about $300\mathrm{ms}$ to run.
+
+Is that reasonable? No, not really. Consider, we have to
+
+1. Establish an initial database connection
+2. Create a testing database
+3. Setup the application (including running migrations setting up additional database connections, as necessary)
+4. Perform the testing logic
+5. Tear down the database
+
+Establishing a connection (from scratch) and creating a database should take at most:
+
+```bash
+time psql "postgresql://postgres:password@localhost:49556/postgres" -c "CREATE DATABASE test_timing_db";
+
+# 0.00s user 0.00s system 4% cpu 0.035 total
+```
+
+In practise, the connection initiation should be pooled. Creating the connection here is $22$ms of the total.
+
+```bash
+time psql "postgresql://postgres:password@172.17.0.3:5432/dwctl" -c "SELECT 1;"
+
+# 0.00s user 0.00s system 4% cpu 0.022 total
+```
+
+What about dropping? <Sidenote>We've got to put some data in here to make it
+representative, so I ran our migrations first. </Sidenote>
+
+```bash
+psql "postgresql://postgres:password@localhost:49556/postgres" -c "DROP DATABASE test_drop_timing;"
+
+# 0.01s user 0.01s system 30% cpu 0.044 total
+```
+
+Remember, this psql command is paying the cost of establishing a connection
+too, so there's about $20ms$ of time taken to drop the database. We should
+count the connection overhead once for creation and drop (hopefully less than
+once, because of pooling for later tests, but lets ignore that).
+
+So - we're paying ~55ms in database overhead - 1, 2, & 5. Wheres the other 250ms going?

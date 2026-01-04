@@ -1,0 +1,197 @@
+---
+title: 'Modelling prefix caching'
+description: |
+pubDate: 'Sep 23 2025'
+index: false
+---
+
+Prefix caching is a technique in LLM inference where we save partial KV caches
+from previous inferences to speed up future ones. How much work does this save?
+
+## Setup
+
+We have:
+- $N$ requests, each generating a sequence of tokens
+- Vocabulary size $K$ (number of distinct tokens)
+- Tokens drawn from some probability distribution (possibly with dependencies)
+- A perfect prefix cache (no eviction policy)
+
+We want to compute the expected number of **cache hits of size $F$**: instances
+where a sequence of $F$ consecutive tokens matches a previously seen sequence,
+allowing us to reuse the cached KV state for those $F$ tokens.
+
+Let $s = (k_0, k_1, ..., k_{F-1})$ denote a specific sequence of $F$ tokens.
+There are $K^F$ possible such sequences.
+
+## General formula
+
+For a sequence $s$, let $p_s$ be the probability that a random request starts with
+sequence $s$. Under a generative model with conditional distributions:
+
+$$
+p_s = P(k_0) \cdot P(k_1|k_0) \cdot P(k_2|k_0,k_1) \cdot \ldots \cdot P(k_{F-1}|k_0,\ldots,k_{F-2})
+$$
+
+Across $N$ independent requests, the number of times sequence $s$ appears follows
+a binomial distribution:
+
+$$
+X_s \sim \mathrm{Binomial}(N, p_s)
+$$
+
+If sequence $s$ appears $n$ times, we get $(n-1)$ cache hits from it: the first
+occurrence is a cache miss (nothing to reuse), and each subsequent occurrence is
+a cache hit. The expected number of cache hits from sequence $s$ is:
+
+$$
+\mathbb{E}[\max(0, X_s - 1)] = \mathbb{E}[X_s] - 1 + P(X_s = 0) = Np_s - 1 + (1-p_s)^N
+$$
+
+By linearity of expectation, summing over all $K^F$ possible sequences:
+
+$$
+\mathbb{E}[\text{cache hits}] = \sum_{s} \left[ Np_s - 1 + (1-p_s)^N \right]
+$$
+
+The first two terms simplify nicely:
+- $\sum_s Np_s = N \sum_s p_s = N$ (probabilities sum to 1)
+- $\sum_s (-1) = -K^F$ (sum over all $K^F$ sequences)
+
+This gives our general formula:
+
+$$
+\boxed{\mathbb{E}[\text{cache hits of size } F] = N - K^F + \sum_{s} (1-p_s)^N}
+$$
+
+**Interpretation:** The total cache hits equals $N$ (total requests) minus $K^F$
+(one "first miss" per sequence), plus a correction term $\sum_s (1-p_s)^N$ that
+accounts for sequences that never appear.
+
+**Observations:**
+- For skewed distributions (some $p_s$ large): $(1-p_s)^N \approx 0$ for common sequences, yielding more cache hits
+- For flat distributions (all $p_s$ small): $(1-p_s)^N \approx 1$, yielding fewer cache hits
+- The sum is bounded: $0 \leq \sum_s (1-p_s)^N \leq K^F$
+
+Without more structure on the distribution $\{p_s\}$, we cannot simplify further.
+
+## Example: Uniform independent tokens
+
+As a concrete example, suppose tokens are independent and uniformly distributed:
+$P(k_i) = 1/K$ for all positions $i$ and all token values. Then every sequence
+has equal probability:
+
+$$
+p_s = \left(\frac{1}{K}\right)^F \quad \text{for all } s
+$$
+
+The general formula becomes:
+
+$$
+\mathbb{E}[\text{cache hits}] = N - K^F + \sum_{s} \left(1-\frac{1}{K^F}\right)^N = N - K^F + K^F\left(1-\frac{1}{K^F}\right)^N
+$$
+
+### Asymptotics
+
+Using the approximation $(1-a/x)^x \approx e^{-a}$, we have:
+
+$$
+\left(1-\frac{1}{K^F}\right)^N \approx e^{-N/K^F}
+$$
+
+Define $\lambda_F = N/K^F$ as the ratio of requests to the number of possible
+sequences. Then:
+
+$$
+\mathbb{E}[\text{cache hits}] \approx N - K^F + K^F e^{-\lambda_F} = K^F(\lambda_F - 1 + e^{-\lambda_F})
+$$
+
+The **cache hit rate** (fraction of requests that hit the cache) is:
+
+$$
+\frac{N - K^F + K^F e^{-\lambda_F}}{N} = 1 - \frac{1}{\lambda_F} + \frac{1}{\lambda_F} e^{-\lambda_F}
+$$
+
+**Behavior:**
+- When $\lambda_F \ll 1$ (sequence space much larger than requests): hit rate $\approx 0$
+- When $\lambda_F \gg 1$ (many requests per possible sequence): hit rate $\to 1 - 1/\lambda_F \to 1$
+- As $F$ increases, $K^F$ grows exponentially, requiring exponentially more requests for good cache hit rates
+- For $F=1$: $\lambda_1 = N/K$ and cache hits $= N - K + Ke^{-N/K}$
+
+## Expected number of cached tokens
+
+In practice, we care about the total number of tokens saved across all requests.
+Each request has $M$ tokens, and we cache all possible prefix lengths. For each
+token position $f$ in each request $i$, that token is cached if and only if the
+prefix of length $f$ has appeared in a previous request.
+
+The expected total cached tokens is:
+
+$$
+\mathbb{E}[\text{total cached tokens}] = \sum_{i=1}^{N} \sum_{f=1}^{M} P(\text{prefix of length } f \text{ from request } i \text{ appeared in requests } 1, \ldots, i-1)
+$$
+
+For request $i > 1$ with a length-$f$ prefix that is sequence $s$:
+
+$$
+P(\text{prefix appeared before}) = \sum_{s} p_s [1 - (1-p_s)^{i-1}]
+$$
+
+Summing over all requests and positions:
+
+$$
+\mathbb{E}[\text{total cached tokens}] = \sum_{f=1}^{M} \sum_{i=2}^{N} \sum_{s \text{ of length } f} p_s [1 - (1-p_s)^{i-1}]
+$$
+
+The inner sum over $i$ evaluates to:
+
+$$
+\sum_{i=2}^{N} [1 - (1-p_s)^{i-1}] = N - \frac{1-(1-p_s)^{N}}{p_s} = Np_s - 1 + (1-p_s)^N
+$$
+
+Therefore:
+
+$$
+\mathbb{E}[\text{total cached tokens}] = \sum_{f=1}^{M} \sum_{s \text{ of length } f} [Np_s - 1 + (1-p_s)^N]
+$$
+
+This is exactly the sum of cache hits over all prefix lengths:
+
+$$
+\boxed{\mathbb{E}[\text{total cached tokens}] = \sum_{f=1}^{M} \mathbb{E}[\text{cache hits of size } f]}
+$$
+
+Expanding:
+
+$$
+\mathbb{E}[\text{total cached tokens}] = \sum_{f=1}^{M} \left[N - K^f + \sum_{s \text{ of length } f} (1-p_s)^N\right]
+$$
+
+$$
+= MN - \sum_{f=1}^{M} K^f + \sum_{f=1}^{M} \sum_{s \text{ of length } f} (1-p_s)^N
+$$
+
+### Uniform independent case
+
+For uniform independent tokens where $p_s = (1/K)^f$ for sequences of length $f$:
+
+$$
+\mathbb{E}[\text{total cached tokens}] = MN - \sum_{f=1}^{M} K^f + \sum_{f=1}^{M} K^f\left(1-\frac{1}{K^f}\right)^N
+$$
+
+The middle term is a geometric series:
+
+$$
+\sum_{f=1}^{M} K^f = K + K^2 + \ldots + K^M = \frac{K(K^M - 1)}{K-1}
+$$
+
+So:
+
+$$
+\boxed{\mathbb{E}[\text{total cached tokens}] = MN - \frac{K(K^M - 1)}{K-1} + \sum_{f=1}^{M} K^f\left(1-\frac{1}{K^f}\right)^N}
+$$
+
+For large $N$, using $(1-1/K^f)^N \approx e^{-N/K^f}$:
+
+$$
+\mathbb{E}[\text{total cached tokens}] \approx MN - \frac{K(K^M - 1)}{K-1} + \sum_{f=1}^{M} K^f e^{-N/K^f}
+$$

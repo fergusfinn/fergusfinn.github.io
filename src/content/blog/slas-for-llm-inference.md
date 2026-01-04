@@ -1,0 +1,134 @@
+---
+title: 'SLAs for LLM inference'
+description: |
+  How do we predict whether an LLM inference system can satisfy a given SLA?
+pubDate: 'Sep 22 2025'
+index: false
+---
+
+We're building a batched inference system. The goal is to maximize the number
+of requests across the whole system that complete within a given time interval.
+By default, this interval is 24h.
+
+More specifically, we want to minimize the total number of requests that miss
+the SLA per unit time. Unlike real-time systems, we don't consider the effect
+of partial results - i.e. time-to-first-token or time-per-output-token - the
+system returns requests to users only when complete.
+
+## Framing as a queuing theory problem
+
+Let's model user requests as random, with the _waiting time_ between requests
+drawn from some distribution $P$. When the requests arrive, they're put into a
+queue. Requests from the queue are processed by servers with a _service time_
+distribution of $Q$. The _sojourn time_ $S$ is the time spent by a given
+request in the whole system - i.e. the time spent in the queue + the service
+time.
+
+Queueing theory problems are stated as:
+
+$$
+  P | Q | n | m
+$$
+
+Where $P$ and $Q$ play the roles we've described. $n$ is the number of servers,
+and $m$ is the maximum queue size before users balk (or before we choose to
+reject users). The other relevant consideration is the _service discipline_ -
+i.e. which jobs are taken from the queue for processing when. Examples are
+First-In-First-Out, First-In-Last-Out, etc.
+
+The overarching goal of minimizing the total number of requests that miss the
+SLA can be stated as minimizing the probability that the sojourn time is higher
+than the SLA time:
+
+$$
+\mathrm{min}_w{P(S > 24hrs)}
+$$
+
+The minimizing is done over all the controllable system parameters - i.e. the
+number of LLM server nodes, the hardware used and its configuration, the
+service discipline, etc.
+
+In practise we might choose some more concrete target - say, that the 99%
+centile of the sojourn time is less than the SLA, etc.
+
+## What are $P$, $Q$, $n$, $m$ for batched LLM inference?
+
+What's the waiting time distribution for user requests? This is hard to model
+correctly for a batched inference system. _A priori_ there's no reason to
+believe that _batches_ are more or less likely to be submitted at one time of
+day vs. another, and so batch submission can be sensibly modelled as being
+Poissonian. But _batch size_ is another story. This distribution is usually
+stated as $M^X$, where $M$ indicates that the arrivals are batches arriving
+with constant rate with sizes given by random variate $X$.
+
+What's the service time distribution? We should start from the distribution of
+input tokens and output tokens - since in combination with the hardware
+parameters and the service discipline, these determine the processing time.
+Call the distribution of input tokens $I$, and the distribution of output
+tokens $O$.
+
+vLLM does 'decode-preference' queuing - it first schedules all
+valid decodes, and then tries to schedule chunks of prefills as possible.
+
+We can model this as a two stage queue, though there are interdependencies.
+Sequences can be in one of 2 service modes:
+
+1. Prefilling
+2. Decoding
+
+The first queue can be thought of as having either zero (no capacity in VRAM
+because of ongoing decodes, see later analysis) or only one server: since
+prefill is almost always compute bound, pulling in multiple prefills from the
+queue doesn't increase throughput. The service time per available server is
+$\alpha I$, where $\alpha$ is the time taken to prefill one chunk of a single
+prefill (i.e. $512$ tokens) divided by the number of tokens in a chunk (we
+neglect memory overhead from chunked prefilling, contention with decodes, etc.)
+
+The service time distribution in the second stage is $\beta O$, where $\beta$
+is the average decode time for a single decode step (we assume that decode is
+always memory bound, and that there's no preemption, we neglect contention
+between ongoing prefills and ongoing decodes in the same batch, the increase in
+decode time with sequence length, & the effect of other decoding sequences in
+the batch).
+
+The magic here is in the empirically determined $\alpha$ and $\beta$ parameters.
+
+How many servers do we have available for the second stage? Considering a single
+physical server node, we have multiple queue-theory 'servers' that process LLM
+requests. The actual effective number of 'servers' per-node (i.e. the number of
+requests from the queue that can be processed by the node in parallel) is
+complicated to determine. Unlike in simple models of queues, the number of
+requests that can be independently decoded in parallel is determined by:
+
+1. The total available VRAM allocated for KV cache.
+2. The number of input tokens per request. KV cache for input tokens is
+   allocated once, when the request starts scheduling, and must remain in
+   memory whenever the request is being serviced.
+3. The number of output tokens generated by the request. KV cache for output
+   tokens is generated dynamically as the request is processed. The total
+   amount grows linearly until the request completes, at which point all KV cache
+   (including that allocated for input tokens) can be dropped. Unlike the number
+   of input tokens, the number of output tokens isn't known ahead of time.
+4. The service discipline. The allocated memory for all the processed sequences
+   must be lower than the total allocated memory. The memory allocated in
+   practise for sequences depends on the specific sequences in progress. Problems
+   like head-of-line blocking can change the maximum number of sequences that can
+   be concurrently processed.
+5. At second-order, but increasingly important with request size - the total
+   number of tokens that the request has grown to already. Larger requests
+   require more memory transfer, which decreases the global throughput, effectively
+   decreasing the number of servers.
+
+```
+                                   |---------|
+                               ->  | decode  |
+                                   |---------|
+
+ |--|--|--|--|     |---------|     |---------|
+ |  |  |  |  |  -> | prefill | ->  | decode  |
+ |--|--|--|--|     |---------|     |---------|
+
+                                   |---------|
+                               ->  | decode  |
+                                   |---------|
+```

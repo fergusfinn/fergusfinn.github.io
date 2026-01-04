@@ -22,7 +22,7 @@ html {
 	scroll-behavior: smooth;
 }
 .app-container {
-	@apply container mx-auto px-6 sm:px-12 lg:px-8 xl:px-12 2xl:px-16;
+	@apply mx-auto px-6 sm:px-12 lg:px-8 xl:px-12 2xl:px-16 max-w-[2000px];
 }
 
 #mobile-menu.mobile-nav-open {

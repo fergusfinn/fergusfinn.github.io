@@ -1,0 +1,46 @@
+---
+title: 'Inference lab'
+description: |
+  Simulating LLM inference in detail
+pubDate: 'Oct 22 2025'
+slug: inference-lab
+index: false
+---
+
+In the previous [post](https://fergusfinn.com/inference-arithmetic), we
+discussed how to model LLM inference. We used a
+[roofline](https://en.wikipedia.org/wiki/Roofline_model) model to get a rough
+sense of what we could expect as theoretical throughput and e2e latency for
+transformer models. We compared to the
+[inferenceMAX](https://inferencemax.semianalysis.com/) benchmarks, and saw that
+those benchmarks hit something like 40-60% of the hardwares peak throughput.
+
+There's something I find a bit unsatisfying about roofline analysis at this
+level of the stack though. For kernels, where we start our analysis where the
+overhead stops, it makes sense. But for end-to-end inference, there's a lot of
+moving parts that we can't model right. For example, we care a lot about the
+time to first token that our users actually experience. In real systems, the
+figures of merit would be quantiles - i.e. the p50, p90, p99 TTFT numbers.
+Rooflines tell us how long generating the first token will take if we know the
+workload that the GPU is processing when the user sends their request, but they
+don't tell us how to find out what that workload is, and so we can't get these
+quantile numbers.
+
+Often when we're setting up real-life inference systems, we want to know the
+answers to lots of detailed questions like this.
+
+1. What kind of p90 TTFT can I attain if i'm serving Qwen3-30B-A3B on an H100?
+2. What's the effect on end to end latency of increasing the maximum generated
+   tokens per request?
+3. How many GPUs do I need to serve X number of users with Y SLA on the TPOT,
+   TTFT, E2E latency, etc.
+
+Beyond that, there's lots of interesting work to be done in the space of
+optimizing inference scheduling, batching, prefix caching, and so on. I talked
+a little bit about this
+[here](https://fergusfinn.com/scheduling-in-inference-engines). Figuring out
+what's worth doing in real systems is slow and frustrating - we need GPUs, we
+need lots of data.
+
+[https://inference-lab.doubleword.ai](https://inference-lab.doubleword.ai) is a
+tool to help us make stuff like this lots easier.
