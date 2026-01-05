@@ -31,6 +31,7 @@ const { Content, remarkPluginFrontmatter } = await post.render()
 	{...post.data}
 	headings={headings}
 	slug={slug}
+	filePath={post.id}
 	remarkPluginFrontmatter={remarkPluginFrontmatter}
 >
 	<Content />

@@ -11,6 +11,7 @@ dayjs.extend(utc)
 type Props = CollectionEntry<'blog'>['data'] & {
 	headings: MarkdownHeading[]
 	slug: string
+	filePath: string
 	remarkPluginFrontmatter: Record<string, string>
 	showConfigSidebar?: boolean
 	stickyToc?: boolean
@@ -23,6 +24,7 @@ const {
 	updatedDate,
 	headings,
 	slug,
+	filePath,
 	remarkPluginFrontmatter,
 	showConfigSidebar = false,
 	stickyToc = false,
@@ -108,7 +110,7 @@ const lastModified = dayjs(remarkPluginFrontmatter.lastModified)
 					<!-- Suggest edit -->
 					<div class="flex justify-between mt-16 gap-4 flex-wrap italic">
 						<a
-							href={`https://github.com/fergusfinn/blog/edit/main/src/content/blog/${slug}.mdx`}
+							href={`https://github.com/fergusfinn/blog/edit/main/src/content/blog/${filePath}`}
 							target="_blank"
 							rel="noopener noreferrer"
 							class="hover:underline underline-offset-4 opacity-70 hover:opacity-100"
