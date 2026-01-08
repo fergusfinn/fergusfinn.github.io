@@ -1,7 +1,7 @@
 ---
-title: 'Parallel Primitives in Practice: Search Without Embeddings'
+title: 'Large-Scale Semantic Search Without Embeddings'
 description: |
-  A practical implementation of parallel search over large datasets using LLM judgments
+  Applying parallel primitives to search and rank 2.4 million arXiv papers using LLM judgments
 pubDate: 'Jan 2026'
 ---
 
