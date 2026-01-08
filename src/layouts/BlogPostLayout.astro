@@ -130,6 +130,52 @@ const lastModified = dayjs(remarkPluginFrontmatter.lastModified)
 	</main>
 
 	<script>
+		// Copy button functionality for code blocks
+		function initCopyButtons() {
+			const codeBlocks = document.querySelectorAll('.prose pre')
+
+			codeBlocks.forEach((pre) => {
+				// Skip if already has a copy button
+				if (pre.querySelector('.copy-code-button')) return
+
+				// Create wrapper for positioning
+				const wrapper = document.createElement('div')
+				wrapper.className = 'code-block-wrapper'
+				pre.parentNode?.insertBefore(wrapper, pre)
+				wrapper.appendChild(pre)
+
+				// Create copy button
+				const button = document.createElement('button')
+				button.className = 'copy-code-button'
+				button.setAttribute('aria-label', 'Copy code')
+				button.innerHTML = `
+					<svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+						<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+					</svg>
+					<svg class="check-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<polyline points="20 6 9 17 4 12"></polyline>
+					</svg>
+				`
+				wrapper.appendChild(button)
+
+				button.addEventListener('click', async () => {
+					const code = pre.querySelector('code')
+					const text = code?.textContent || pre.textContent || ''
+
+					try {
+						await navigator.clipboard.writeText(text)
+						button.classList.add('copied')
+						setTimeout(() => {
+							button.classList.remove('copied')
+						}, 2000)
+					} catch (err) {
+						console.error('Failed to copy:', err)
+					}
+				})
+			})
+		}
+
 		// Tufte-style sidenotes functionality
 		function initSidenotes() {
 			// Handle component-based sidenotes with auto-numbering
@@ -172,9 +218,13 @@ const lastModified = dayjs(remarkPluginFrontmatter.lastModified)
 
 		// Initialize when DOM is ready
 		if (document.readyState === 'loading') {
-			document.addEventListener('DOMContentLoaded', initSidenotes)
+			document.addEventListener('DOMContentLoaded', () => {
+				initSidenotes()
+				initCopyButtons()
+			})
 		} else {
 			initSidenotes()
+			initCopyButtons()
 		}
 	</script>
 

@@ -75,6 +75,50 @@ html {
 	line-height: 1.1;
 }
 
+/* Code block copy button */
+.code-block-wrapper {
+	position: relative;
+}
+
+.copy-code-button {
+	position: absolute;
+	top: 0.5rem;
+	right: 0.5rem;
+	padding: 0.375rem;
+	border-radius: 0.375rem;
+	background: rgba(255, 255, 255, 0.1);
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	color: rgba(255, 255, 255, 0.6);
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 0.2s ease, background 0.2s ease, color 0.2s ease;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.code-block-wrapper:hover .copy-code-button {
+	opacity: 1;
+}
+
+.copy-code-button:hover {
+	background: rgba(255, 255, 255, 0.2);
+	color: rgba(255, 255, 255, 0.9);
+}
+
+.copy-code-button .check-icon {
+	display: none;
+}
+
+.copy-code-button.copied .copy-icon {
+	display: none;
+}
+
+.copy-code-button.copied .check-icon {
+	display: block;
+	color: #22c55e;
+}
+
 /* Math text sizing - KaTeX */
 .prose .katex {
 	font-size: 1em !important;
