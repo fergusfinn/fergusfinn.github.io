@@ -21,7 +21,7 @@ export async function GET(context) {
       pubDate: post.data.pubDate,
       description: post.data.description,
       link: `/blog/${post.slug}/`,
-      customData: `<mdUrl>${context.site}blog/${post.slug}/md</mdUrl>${post.data.syndicate ? '<syndicate>true</syndicate>' : ''}`,
+      customData: `<mdUrl>${context.site}blog/${post.slug}/md</mdUrl>`,
     })),
   })
 }
