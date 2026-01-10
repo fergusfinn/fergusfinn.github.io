@@ -10,7 +10,6 @@ const blog = defineCollection({
     index: z.boolean().default(true),
     showConfigSidebar: z.boolean().optional(),
     stickyToc: z.boolean().optional(),
-    syndicate: z.boolean().optional(), // Cross-post to company blog
   }),
 })
 
