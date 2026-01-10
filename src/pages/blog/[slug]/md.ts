@@ -15,7 +15,7 @@ export const GET: APIRoute = async ({ props }) => {
   // Return raw markdown body (without frontmatter)
   return new Response(post.body, {
     headers: {
-      'Content-Type': 'text/markdown; charset=utf-8',
+      'Content-Type': 'text/plain; charset=utf-8',
     },
   })
 }
