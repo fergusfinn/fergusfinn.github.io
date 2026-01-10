@@ -20,9 +20,8 @@ export async function GET(context) {
       title: post.data.title,
       pubDate: post.data.pubDate,
       description: post.data.description,
-      // Compute RSS link from post `id`
-      // This example assumes all posts are rendered as `/blog/[id]` routes
-      link: `/blog/${post.id.replace(/\.mdx?$/, '')}/`,
+      link: `/blog/${post.slug}/`,
+      customData: `<mdUrl>${context.site}blog/${post.slug}/md</mdUrl>${post.data.syndicate ? '<syndicate>true</syndicate>' : ''}`,
     })),
   })
 }
