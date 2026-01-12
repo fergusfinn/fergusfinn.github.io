@@ -22,6 +22,11 @@ export const SocialLinks = [
     icon: 'mdi:linkedin',
   },
   {
+    name: 'X',
+    url: 'https://x.com/finn_fergus',
+    icon: 'mdi:twitter',
+  },
+  {
     name: 'Google Scholar',
     url: 'https://scholar.google.com/citations?user=tAp5bZ8AAAAJ&hl=en',
     icon: 'mdi:school',
