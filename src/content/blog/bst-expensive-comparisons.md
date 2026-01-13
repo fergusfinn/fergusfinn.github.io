@@ -1,5 +1,5 @@
 ---
-title: 'LLM powered data structures: A lock-free binary search tree'
+title: 'LLM powered data structures: A concurrent, lock-free binary search tree'
 description: |
   A lock-free binary search tree optimized for expensive async comparisons, with threaded linked list for O(1) sorted iteration
 pubDate: '13 Jan 2026'
@@ -59,6 +59,8 @@ powered _index_ for your data[^1].
     The tradeoff is that embeddings front-load the work, whereas for generative
     comparisons you have to pay at query time. But you get to ask arbitrary
     questions: "most relevant to X", "most persuasive", "most technically novel".
+
+Let's walk through how to build one that works well when comparisons are expensive and async.
 
 ## BST insertion
 
@@ -326,7 +328,7 @@ self-balance, so shuffle your inputs.
 **Comparison transitivity.** BSTs assume transitive comparisons: if A < B and
 B < C, then A < C. LLM comparisons don't always satisfy this - they can be
 inconsistent, especially for items that are close in rank. The tree will still
-produce *some* ordering, but it might not match what you'd get from a different
+produce _some_ ordering, but it might not match what you'd get from a different
 insertion order. If you need robust rankings despite inconsistent comparisons,
 consider voting across multiple comparisons or using a different ranking
 algorithm.
@@ -336,7 +338,12 @@ algorithm.
 We built a BST optimized for expensive async comparisons: parallel insertion
 with optimistic concurrency control, and a threaded linked list for O(1) access
 to sorted results. The implementation lives in
-[parfold](https://github.com/doubleword/parfold).
+[parfold](https://github.com/doubleword/parfold)[^2].
+
+[^2]:
+    It's in python! Because we're calling LLMs for each comparison, we don't
+    care about cache locality or the number of instructions we're using or
+    threading, &c., so python + async/await works fine.
 
 The result is less a sorting algorithm than an index. During
 construction, you're asking the LLM "is A better than B?" for hundreds of pairs,
