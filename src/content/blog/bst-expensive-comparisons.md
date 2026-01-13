@@ -1,5 +1,5 @@
 ---
-title: 'LLM powered data structures: A lock-free BST'
+title: 'LLM powered data structures: A lock-free binary search tree'
 description: |
   A lock-free binary search tree optimized for expensive async comparisons, with threaded linked list for O(1) sorted iteration
 pubDate: '13 Jan 2026'
