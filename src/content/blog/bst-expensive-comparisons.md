@@ -42,7 +42,7 @@ parallelism at each level of recursion: all comparisons against the pivot
 happen at once, then the two partitions sort in parallel. In a BST (as we'll
 see), you get parallelism across insertions: multiple items traverse the tree
 simultaneously, each racing down toward its insertion point. The total
-comparison count is the same, O(n log n), but the shape of the parallelism is
+comparison count is the same, $O(n \log n)$, but the shape of the parallelism is
 different.
 
 The BST also gives you something quicksort doesn't: once you've built it, you
@@ -336,7 +336,7 @@ algorithm.
 ## Conclusion
 
 We built a BST optimized for expensive async comparisons: parallel insertion
-with optimistic concurrency control, and a threaded linked list for O(1) access
+with optimistic concurrency control, and a threaded linked list for $O(1)$ access
 to sorted results. The implementation lives in
 [parfold](https://github.com/doubleword/parfold)[^2].
 
