@@ -23,8 +23,8 @@ NOTES:
 - Audience: technical generalists, no BST hand-holding needed
 -->
 
-In a [previous post](/blog/parallel-primitives-blog) I introduced parallel
-primitives for LLM workflows, and in a [follow-up](/blog/arxiv-llm-search)
+In a [previous post](https://fergusfinn.com/blog/parallel-primitives-blog) I introduced parallel
+primitives for LLM workflows, and in a [follow-up](https://fergusfinn.com/blog/arxiv-llm-search)
 applied them to search and rank 2.4 million arXiv papers. The ranking step used
 quicksort with an LLM comparator: To sort a list of $N$ items, we partition
 them around a pivot, then recurse on the partitioned halves, and let the
