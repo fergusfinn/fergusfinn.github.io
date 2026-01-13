@@ -13,7 +13,9 @@ Embeddings are a compression. You run the model once per document, extract a vec
 
 If generative inference were cheap enough, you'd skip the compression. You'd just ask the model: "Is this document relevant to this query?" for every document, at query time. The judgment would be contextual, specific to what you're actually asking, not baked in ahead of time.
 
-Inference isn't quite that cheap yet (though we're [working on it](https://batched.doubleword.ai/)). Embeddings aren't dead. But batched inference does close the gap enough to make this approach practical for a lot of use cases. The [OpenAI batch API](https://platform.openai.com/docs/guides/batch) gives you 50% off in exchange for higher latency, and the Doubleword [Batched](https://docs.doubleword.ai/batches) service takes off another factor of two.
+Inference isn't quite that cheap yet (though we're [working on it](https://batched.doubleword.ai/)). Embeddings aren't dead. But batched inference does close the gap enough to make this approach practical for a lot of use cases. The [OpenAI batch API](https://platform.openai.com/docs/guides/batch) gives you 50% off in exchange for higher latency, and the Doubleword [Batched](https://docs.doubleword.ai/batches) service takes off another factor of four[>_1].
+
+[>_1]: At the same intelligence level. The comparison is between models with similar capabilities on these judgment tasks.
 
 At batch prices, you can start to afford things that would have been absurd at realtime rates: asking an LLM "is this relevant?" for every document in a corpus, ranking results with pairwise comparisons, treating the model as a general-purpose judgment function rather than a carefully-rationed oracle.
 
