@@ -43,13 +43,7 @@ happen at once, then the two partitions sort in parallel. In a BST (as we'll
 see), you get parallelism across insertions: multiple items traverse the tree
 simultaneously, each racing down toward its insertion point. The total
 comparison count is the same, $O(n \log n)$, but the shape of the parallelism is
-different.
-
-The BST also gives you something quicksort doesn't: once you've built it, you
-can iterate over the sorted order without any further comparisons. If you're
-going to traverse the results multiple times, or access min/max repeatedly, the
-cost of those comparisons is already paid. The result is a kind of LLM
-powered _index_ for your data[^1].
+different. The result is a kind of LLM powered index for your data[^1].
 
 [^1]:
     There's an obvious similarity to embeddings powered vector indexes. The
@@ -92,8 +86,10 @@ async def insert(self, value: T) -> None:
 
 The comparison function is async because, in our case, it might be an LLM call.
 For a tree of depth $d$, insertion requires $d$ comparisons, one at each level
-as you descend. A balanced tree has depth $O(\log n)$, so insertion is
+as you descend. A balanced tree has depth $O(\log n)$[>3], so insertion is
 $O(\log n)$ comparisons.
+
+[>3]: $n$ being the total number of elements in the tree.
 
 ## Parallel insertion
 
@@ -141,20 +137,6 @@ within each partition: all $k$ elements compare against the pivot simultaneously
 then you recurse. In the BST, you get parallelism across insertions: all $n$
 items are traversing the tree at once, but each one is doing its own sequential
 chain of comparisons down from root to leaf.
-
-Which is better? It depends on the tree shape. A balanced tree of $n$ items has
-depth $\log n$, so if you insert all $n$ items in parallel, you're doing
-$O(\log n)$ rounds of comparisons, with $O(n)$ comparisons happening in
-parallel at each round[>3]. That's the same as quicksort's best case. But if
-the tree is unbalanced, say from inserting already-sorted data, the depth
-becomes $O(n)$ and you lose the parallelism advantage. Quicksort has the same
-worst case, of course, but randomizing the pivot helps; for BSTs, you'd want to
-either randomize insertion order or use a self-balancing variant.
-
-[>3]: This is a bit hand-wavy. In practice the comparisons don't line up neatly
-into rounds, since different items take different amounts of time and follow
-different paths. The point is that the depth of the tree bounds the critical
-path.
 
 There's a problem lurking here, though. What happens when two items race down
 the same path and both try to insert at the same spot? If A and B both decide
@@ -217,27 +199,19 @@ here means throwing away $O(\log n)$ LLM calls and starting over. The saving gra
 is that conflicts require two items to reach the same insertion point at nearly
 the same instant. With comparisons taking hundreds of milliseconds, that window
 is tiny, and items on different paths don't conflict at all. In practice, with
-hundreds of concurrent insertions, retries are rare[>4]. And if you do retry,
-you can cache the comparison results from your first attempt - the retry just
-replays the cached answers until it reaches the point where the tree changed.
-
-[>4]: An alternative is hand-over-hand locking: lock each node as you descend,
-release it once you've locked its child. But this serializes comparisons at
-every shared node. With optimistic locking, items sharing a path can compare in
-parallel - you only conflict at the final insertion point, not along the way.
+hundreds of concurrent insertions, retries are rare. And if you do retry, you can cache the comparison results
+from your first attempt - the retry just replays the cached answers until it
+reaches the point where the tree changed.
 
 The lock itself is minimal: just the pointer assignment to link the new node.
 Everything expensive happens outside the lock.
 
 ## Threaded linked list for free iteration
 
-Once you've built the tree, you probably want to iterate over the sorted
-results. In a plain BST, that means an in-order traversal: recurse left, visit
-node, recurse right. It's $O(n)$ time, but you need to actually walk the tree
-structure. And if you just want the minimum or maximum element, you have to
-walk down the left or right spine, $O(\log n)$ each time.
-
-We can do better by threading a linked list through the nodes. Each node gets
+Once you've built the tree, you'll want to access the sorted results. With a
+plain BST, finding the minimum means walking down the left spine[>4]. Threading
+a linked list through the nodes makes min O(1), and iteration becomes simple
+pointer chasing instead of tree traversal. Each node gets
 `prev` and `next` pointers to its in-order predecessor and successor:
 
 ```python
@@ -249,6 +223,10 @@ class Node(Generic[T]):
     prev: Node[T] | None = None   # in-order predecessor
     next: Node[T] | None = None   # in-order successor
 ```
+
+[>4]: This is O(log n) cheap pointer hops, not O(log n) expensive comparisons.
+The threading is a nice-to-have since we're already doing pointer updates
+during insertion.
 
 The tree also keeps `_head` and `_tail` pointers to the smallest and largest
 nodes. When we insert a new node, we thread it into the list as part of the
@@ -291,10 +269,6 @@ def min(self) -> T | None:
     return self._head.value if self._head else None
 ```
 
-If you're using the tree as an index - repeatedly asking "what's the best item
-so far?" - this is a significant win. You've already paid for the ordering
-during insertion; accessing it shouldn't cost more comparisons.
-
 ## Prefix caching and argument order
 
 Most LLM providers offer prefix caching: prompts sharing a common prefix reuse
@@ -332,6 +306,10 @@ produce _some_ ordering, but it might not match what you'd get from a different
 insertion order. If you need robust rankings despite inconsistent comparisons,
 consider voting across multiple comparisons or using a different ranking
 algorithm.
+
+**No deletion.** We didn't cover deletion, and some design choices (like full
+restart on version conflict) are conservative in ways that would matter more
+if we did.
 
 ## Conclusion
 
