@@ -32,7 +32,7 @@ The alternative is curation, where an individual does the filtering for you[>1].
 The catch is that you need the crowd or the curator to exist. There has to be enough people who share your particular interest that their votes create signal, or you need one person who cares enough to create that signal by themself. And for a lot of things, neither is there. I'd like a feed of interesting programming content that isn't about AI, for example[>_1]. That's a perfectly reasonable thing to want, and the content certainly exists, scattered across blogs and forums and newsletters.
 
 [>_1]: Fig 1. The problem.
-![Google results for "interesting programming content" - mostly AI articles](/blog-images/google-programming-content.png)
+![Google results for "interesting programming content" - mostly AI articles](https://fergusfinn.com/blog-images/google-programming-content.png)
 
 I've been experimenting with a different approach: you describe what you want in natural language, and coordinated LLM calls make the judgment calls a curator would make. Is this relevant? Is this quality? Is this more interesting than that? The judgment is personalized to your description, not averaged from a crowd's taste or limited by one person's reading. Curation's judgment at aggregation's scale, through coordination rather than crowds.
 
@@ -133,7 +133,7 @@ Once built, the BST is an index you can read without further LLM calls. Iterate 
 The description alone doesn't fully capture what you want[>_2]. "Interesting programming content that isn't about AI" leaves a lot of room for interpretation - the LLM has to guess at your taste. Votes provide a way to refine that.
 
 [>_2]: Fig 2. Better.
-![Ranked results showing programming content without AI](/blog-images/vibe-news-results.png)
+![Ranked results showing programming content without AI](https://fergusfinn.com/blog-images/vibe-news-results.png)
 
 When you upvote or downvote content, those votes become exemplars that shape future comparisons.
 
