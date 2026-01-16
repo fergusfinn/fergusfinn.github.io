@@ -46,13 +46,12 @@ comparison count is the same, $O(n \log n)$, but the shape of the parallelism is
 different. The result is a kind of LLM powered index for your data[^1].
 
 [^1]:
-    There's an obvious similarity to embeddings powered vector indexes. The
-    difference is, with embeddings, the intelligence is baked into the vectors; the
-    similarity metric is just cosine distance, arithmetic that doesn't know what
-    you're asking. With generative comparisons, the metric itself is intelligent.
-    The tradeoff is that embeddings front-load the work, whereas for generative
-    comparisons you have to pay at query time. But you get to ask arbitrary
-    questions: "most relevant to X", "most persuasive", "most technically novel".
+    This resembles embedding-powered vector indexes: both front-load work to
+    make later queries cheap. The difference is in the metric. With embeddings,
+    comparisons are always cosine distance to fixed vectors, even while your
+    prompt shapes the query vector. Generative models are more steerable - they
+    read the full documents and can follow whatever comparison criteria you
+    specify. The tradeoff is cost.
 
 Let's walk through how to build one that works well when comparisons are expensive and async.
 
