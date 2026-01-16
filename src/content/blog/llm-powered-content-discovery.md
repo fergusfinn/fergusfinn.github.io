@@ -1,114 +1,148 @@
 ---
-title: 'LLM-Powered Content Discovery'
+title: 'Scaling Curation with LLM Comparisons'
 description: |
   Building a content discovery system using parallel primitives and BST-based ranking with LLM comparisons
-pubDate: '13 Jan 2026'
-index: false
+pubDate: '16 Jan 2026'
 ---
 
 <!--
-STATUS: Skeleton - awaiting feedback
+STATUS: Draft complete - ready for review
 
 OUTLINE:
-- [ ] Introduction - the index problem
-- [ ] The Pipeline - high-level view
-- [ ] Query Expansion - unfold in action
-- [ ] Filtering and Summarization - LLM as quality gate
-- [ ] Ranking via BST - pairwise comparisons
-- [ ] Exemplar Learning - votes as feedback
-- [ ] Performance Reality - actual numbers
-- [ ] Conclusion - judgment not generation
+- [x] Introduction - the curation problem
+- [x] Research - query expansion via unfold
+- [x] Filtering - relevance scoring
+- [x] Ranking - BST with pairwise comparisons
+- [x] Exemplar Learning - votes as feedback
+- [x] Conclusion - judgment not generation
 
 NOTES:
 - Third post in series after parallel-primitives and bst-expensive-comparisons
 - Audience: technical generalists comfortable with algorithms
-- Don't call it "Vibe News"
-- Emphasize the "weird/surprising" content angle
 -->
 
 ## Introduction
 
-[The problem: content discovery when your ranking criterion is subjective and freeform. Keywords don't capture "weird programming projects, people building things the hard way." Embeddings get you similarity but not judgment. What if you could describe what you want in natural language and have the system find and rank content accordingly?]
+I've been thinking about how content discovery actually works online. The dominant model is aggregation: crowds voting on things, with the most popular stuff floating to the top. Hacker News, Reddit, Lobsters - they all work this way, and it's genuinely effective when your interests happen to align with an existing community. You get a feed filtered by collective judgment, there's always something new, and the sheer scale of participation means obscure things surface that you'd never find on your own.
 
-[This post ties together the primitives from the previous two posts. We built fold/unfold for parallel coordination; we built a concurrent BST for expensive comparisons. Now we put them to work.]
+The alternative is curation, where an individual does the filtering for you[>1]. Someone reads widely and picks the best of what they found, or you follow writers whose taste you trust. You're borrowing someone's judgment rather than averaging a crowd's, which often produces better results - a good curator has judgment that a voting mechanism can't replicate.
 
-## The Pipeline
+[>1]: Some good curated sources: [The Browser](https://thebrowser.com/) for essays, [Five Books](https://fivebooks.com/) for expert book recommendations.
 
-[High-level view of the system. User writes a freeform description of their interests. The system expands this into search queries, fetches content, filters for quality, and ranks by relevance using pairwise LLM comparisons. The result is a personalized feed that updates in real-time as new content is discovered.]
+The catch is that you need the crowd or the curator to exist. There has to be enough people who share your particular interest that their votes create signal, or you need one person who cares enough to create that signal by themself. And for a lot of things, neither is there. I'd like a feed of interesting programming content that isn't about AI, for example[>_1]. That's a perfectly reasonable thing to want, and the content certainly exists, scattered across blogs and forums and newsletters.
+
+[>_1]: Fig 1. The problem.
+![Google results for "interesting programming content" - mostly AI articles](/blog-images/google-programming-content.png)
+
+I've been experimenting with a different approach: you describe what you want in natural language, and coordinated LLM calls make the judgment calls a curator would make. Is this relevant? Is this quality? Is this more interesting than that? The judgment is personalized to your description, not averaged from a crowd's taste or limited by one person's reading. Curation's judgment at aggregation's scale, through coordination rather than crowds.
+
+This post ties together the primitives from the [previous](https://fergusfinn.com/blog/parallel-primitives) [two](https://fergusfinn.com/blog/bst-expensive-comparisons) posts. We built fold/unfold for parallel coordination; we built a concurrent BST for expensive comparisons. Let's put them to work. Here's a concrete description of what we're looking for:
+
+> Interesting programming content that isn't about AI or LLMs. People building things the hard way: writing their own compilers, emulators, operating systems, text editors. Deep investigations into why something broke or how something works under the hood. Weird constraints leading to creative solutions. Projects where someone clearly cared more about the craft than the outcome.
+
+## Research
+
+High-throughput, low-cost inference[>3] means we can afford to filter aggressively - evaluate thousands of candidates and keep the best. But first we need the candidates. Search APIs are how content comes in, and each query returns a narrow slice of the web. To use the filtering capacity we have, we need to fan out: turn one description into many diverse queries that together cover the territory.
+
+[>3]: We've been building a batch API for exactly these use cases at [Doubleword](https://app.doubleword.ai). Results come back in minutes rather than milliseconds, but you can run thousands of calls for pennies.
+
+We expand recursively. The LLM takes the description and generates 3-5 search queries - different angles on what we're looking for. Each of those expands again, branching out until the queries are specific enough to run. This is [unfold](https://fergusfinn.com/blog/parallel-primitives): build a tree by repeated expansion.
 
 ```txt
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  User Interest  │────▶│  Query Expansion │────▶│     Search      │
-│  Description    │     │  (unfold)        │     │   (parallel)    │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-                                                         │
-                        ┌─────────────────┐     ┌────────▼────────┐
-                        │   Ranked Feed   │◀────│    Filter &     │
-                        │   (BST output)  │     │   Summarize     │
-                        └─────────────────┘     └─────────────────┘
-                                 ▲                       │
-                                 │              ┌────────▼────────┐
-                                 └──────────────│   BST Ranking   │
-                                                │ (pairwise LLM)  │
-                                                └─────────────────┘
+                     "Interesting programming content..."
+                                      │
+               ┌──────────────────────┼──────────────────────┐
+               │                      │                      │
+         "compilers              "debugging              "hobby OS
+          from scratch"          war stories"             projects"
+               │                      │                      │
+          ┌────┴────┐            ┌────┴─────┐               SEARCH
+          │         │            │          │
+     "parsing     SEARCH   "postmortem    "tracking
+      from                    writeups"     down
+      scratch"                   │        heisenbugs"
+          │                      │          │
+       SEARCH                 SEARCH      SEARCH
 ```
 
-[Each stage runs in parallel where possible. The unfold expands breadth-first. Search workers hit multiple providers concurrently. Summarization runs in parallel across results. BST insertion is concurrent with optimistic locking. The whole pipeline streams results to the user as they're ranked.]
+The LLM decides when to stop expanding. If a query is already specific enough to search, it returns SEARCH instead of generating children. "Hobby OS projects" is concrete enough; "compilers from scratch" could use another level of decomposition.
 
-## Query Expansion
+The prompt is simple:
 
-[The unfold primitive from the first post, now doing real work. Starting from "weird programming projects, unusual implementations," the LLM generates orthogonal search directions: different content types (projects vs discussions vs tutorials), different sources (GitHub vs HN vs blogs), different framings (how-to vs post-mortem vs comparison).]
+```
+Expand into 3-5 different search queries, or reply SEARCH if specific enough.
 
-[Show the prompt structure. Emphasize orthogonality: we want coverage, not variations on a theme. The tree expands to depth 3, yielding 50-100 specific searches from a single freeform description.]
+Query: {current_query}
+Already searched: {path}
 
-[The "SEARCH" escape hatch: when a query is specific enough, stop expanding and execute. This prevents over-decomposition.]
+Generate diverse queries (different angles, not variations). One per line:
+```
 
-## Filtering and Summarization
+The path shows queries already generated above this point in the tree, which helps avoid redundancy. The emphasis on "different angles, not variations" pushes the LLM toward breadth rather than rephrasing the same idea.
 
-[Before content enters the ranking BST, it passes through an LLM filter. This is doing two jobs: quality gating and feature extraction.]
+The tree expands breadth-first, with each level running in parallel. A depth-3 tree with 3-5 children per node yields 50-100 leaf queries from a single description. Wall-clock time is O(depth) - three sequential LLM calls - regardless of how wide the tree gets.
 
-[Quality filters: index pages, SEO spam, marketing dressed as content, aggregators without added value, thin content, paywalled teasers. The prompt enumerates these explicitly so the LLM knows what to reject.]
+## Filtering
 
-[Feature extraction: a summary optimized for downstream ranking (the hook, concrete details, why it's interesting), a relevance score, and a "weirdness score" calibrated from 0-1. The weirdness score is a first-pass signal that feeds into comparisons later.]
+The searches return noise. Index pages, SEO spam, paywalled teasers with no real content. You could try to filter aggressively here - reject anything that doesn't look like quality content - but I think that's the wrong place to spend effort. The ranking step already makes quality judgments through pairwise comparisons; filtering just needs to keep the candidate pool roughly on-topic.
 
-[The gate: content must pass quality filters AND score above a relevance threshold. This prevents the BST from filling up with marginally-relevant results.]
+So filtering is a single LLM call per candidate: given the content and the description, how relevant is this, from 0 to 1? Anything above 0.2 passes through.
 
-## Ranking via BST
+```txt
+   content                       score
+   ───────────────────────────────────────
+   "Writing a Compiler in Go"     0.7   ✓
+   "10 Best Coding Bootcamps"     0.05  ✗
+   "How We Debug at Stripe"       0.6   ✓
+   "Marketing Your SaaS"          0.1   ✗
+   "My Hobby OS Project"          0.4   ✓
+   "nginx default index"          0.0   ✗
+```
 
-[The BST from the second post, now ranking real content. Each piece of content that passes filtering gets inserted into a tree ordered by "interestingness to this user." Insertion requires O(log n) pairwise comparisons, each asking: "Which of these is more relevant/surprising/valuable for someone interested in {description}?"]
+## Ranking
 
-[The comparison prompt includes: the user's interest description, the two items being compared (title, summary, age, weirdness label), and crucially, exemplars from the user's voting history.]
+Content that passes filtering gets inserted into a [BST ordered by pairwise LLM comparisons](https://fergusfinn.com/blog/bst-expensive-comparisons). Each insertion traverses down the tree, comparing the new item against existing nodes. After $O(\log n)$ comparisons, it finds its place in the ranking.
 
-[The threaded linked list pays off here. Once content is ranked, we can iterate in sorted order without further comparisons. Min/max are O(1). The BST becomes an index: pay for the comparisons once during insertion, query the results for free afterward.]
+The comparison prompt is minimal[>4]:
+
+[>4]: More on exemplars below.
+
+```
+Which is more interesting for someone into: {description}?
+
+Exemplars (content they liked):
+{exemplars}
+
+A: {title_a} ({age_a})
+{content_a}
+
+B: {title_b} ({age_b})
+{content_b}
+
+Reply A, B, or EQUAL:
+```
+
+The leaderboard has a maximum size, say 200 items. When a new item is inserted and the tree exceeds that limit, the minimum gets evicted[>2]. The [threaded linked list](https://fergusfinn.com/blog/bst-expensive-comparisons#threaded-linked-list) makes this cheap: the minimum is always at the head, so eviction is just unlinking a node.
+
+[>2]: We didn't cover deletion in the BST post. It's fiddly, especially with concurrent access, but the threaded linked list makes eviction straightforward.
+
+Once built, the BST is an index you can read without further LLM calls. Iterate in sorted order, grab the top 10, find the minimum - the comparisons were paid for during insertion.
 
 ## Exemplar Learning
 
-[Users can upvote and downvote content. These votes become exemplars that shape future comparisons.]
+The description alone doesn't fully capture what you want[>_2]. "Interesting programming content that isn't about AI" leaves a lot of room for interpretation - the LLM has to guess at your taste. Votes provide a way to refine that.
 
-[Positive exemplars: "The user has upvoted content similar to these - prioritize content in this style." Included in the comparison prompt with title and truncated summary.]
+[>_2]: Fig 2. Better.
+![Ranked results showing programming content without AI](/blog-images/vibe-news-results.png)
 
-[Negative exemplars: "The user has DOWNVOTED content similar to these - AVOID and deprioritize." Same structure, opposite signal.]
-
-[This is a form of few-shot learning baked into the ranking criterion. The LLM isn't just matching the description; it's learning the user's taste from examples. The comparison cache invalidates when the description changes (different hash), but exemplars don't invalidate the cache - they're guidance layered on top.]
-
-## Performance
-
-[What do the numbers actually look like?]
-
-[Query expansion: depth-3 unfold with 3-5 children per node yields 50-100 leaf queries. Wall-clock time is O(depth) since each level expands in parallel.]
-
-[Search: 10 concurrent workers, rate-limited per provider. 30-minute cache on queries. Deduplication by URL before summarization.]
-
-[Summarization: 40 concurrent workers. Each item gets one LLM call for filtering + summary + scores.]
-
-[Ranking: BST insertions batched 500 at a time. Comparisons batched 100 at a time with 2-second windows. For a 200-item leaderboard, roughly 200 * log(200) ≈ 1500 comparisons, but many hit cache. Cache hit rates after warmup: 60-80%.]
-
-[End-to-end: a fresh feed with no cache takes several minutes to populate. Incremental updates (new content into existing feed) are much faster since the BST structure and comparison cache persist.]
+When you upvote or downvote content, those votes become exemplars that shape future comparisons.
 
 ## Conclusion
 
-[The system uses LLMs for judgment, not generation. Every LLM call is a decision: should this query expand further? Is this content worth ranking? Is A more interesting than B? The output isn't generated text; it's a ranked index that encodes thousands of these micro-judgments.]
+What makes this work is that judgment is cheaper than generation. A yes/no relevance check, a pairwise comparison - these are short outputs, easy to batch, and the cost keeps dropping. At no point does the LLM write anything you actually read; it just decides what's worth reading and in what order. That's what curators do. The difference is that a human curator can only read so much, and their taste might not match yours.
 
-[The result is a materialized view of the LLM's taste, personalized to the user's description and refined by their feedback. Once built, you can query it without further LLM calls: what's the best thing? What's in the top 10? Iterate through everything in order. The comparisons are already paid for.]
+Embeddings are fast and good enough for a lot of things. But for the cases where you actually care about the quality of the ranking - where the judgment is the product - it might be worth paying for.
 
-[There's an obvious parallel to embeddings-based indexes. Both pre-compute something expensive (embedding vectors, pairwise comparisons) to make queries cheap. The difference is what gets pre-computed. Embeddings encode semantic similarity via fixed geometry. LLM comparisons encode judgment that can consider relevance, surprise, quality, timeliness, and whatever else the prompt asks for. The tradeoff is cost: embeddings are cheap to compute and compare, LLM comparisons are expensive. But for applications where nuanced judgment matters, the cost might be worth it.]
+---
+
+This runs on [Doubleword's batch API](https://app.doubleword.ai). If you want to build something similar, that's where to start.
