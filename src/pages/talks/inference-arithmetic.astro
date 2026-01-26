@@ -1,0 +1,214 @@
+---
+import SlideDeckLayout from '../../layouts/SlideDeckLayout.astro'
+import FormulaFLOPs from '../../components/inference/FormulaFLOPs.tsx'
+import FormulaThreshold from '../../components/inference/FormulaThreshold.tsx'
+import FormulaPrefill from '../../components/inference/FormulaPrefill.tsx'
+import FormulaDecode from '../../components/inference/FormulaDecode.tsx'
+import FormulaE2E from '../../components/inference/FormulaE2E.tsx'
+import ThroughputChart from '../../components/inference/ThroughputChart.tsx'
+import LatencyChart from '../../components/inference/LatencyChart.tsx'
+---
+
+<SlideDeckLayout title="Inference Arithmetic" description="Understanding LLM inference from first principles">
+
+	<!-- Slide 1: Title -->
+	<section class="slide flex flex-col items-center justify-center text-center">
+		<h1 class="text-5xl font-semibold mb-4">Inference Arithmetic</h1>
+		<p class="text-2xl">Understanding LLM capacity from first principles</p>
+		<p class="text-lg mt-12">Fergus Finn</p>
+		<p class="text-lg">Doubleword</p>
+	</section>
+
+	<!-- Slide 2: Motivation -->
+	<section class="slide flex flex-col justify-center max-w-3xl mx-auto">
+		<h2 class="text-3xl font-semibold mb-8">We're building an LLM API designed for high volume</h2>
+		<p class="text-xl leading-relaxed mb-6">
+			You send us requests, we return them completed within an SLA.
+			Not real-time, but substantially cheaper.
+		</p>
+		<p class="text-xl leading-relaxed mb-6">
+			Running this at scale means knowing how many GPUs can serve how
+			many requests. Experimentation is slow and expensive. We need to
+			understand what we <em>can</em> do from first principles.
+		</p>
+		<p class="text-xl leading-relaxed">
+			That requires some inference arithmetic.
+		</p>
+	</section>
+
+	<!-- Slide 3: Matmuls (with detail sub-slide) -->
+	<div class="slide-stack">
+		<section class="slide flex flex-col justify-center max-w-3xl mx-auto">
+			<h2 class="text-3xl font-semibold mb-8">What do LLMs do?</h2>
+			<p class="text-xl leading-relaxed mb-6">
+				Matmuls, mostly. Everything else is negligible.
+			</p>
+			<p class="text-xl leading-relaxed mb-6">
+				Total FLOPs for a single sequence:
+			</p>
+			<div class="my-8">
+				<FormulaFLOPs client:load />
+			</div>
+		</section>
+		<section class="slide flex flex-col justify-center max-w-3xl mx-auto">
+			<h2 class="text-3xl font-semibold mb-8">Why 2 &times; ISL &times; P?</h2>
+			<p class="text-xl leading-relaxed mb-6">
+				A weight matrix of shape (D_in, D_out) has D_in &times; D_out parameters.
+				Multiplying it by ISL vectors does one multiply and one add per
+				weight per vector. That's 2 &times; D_in &times; D_out &times; ISL FLOPs.
+			</p>
+			<p class="text-xl leading-relaxed mb-6">
+				Since D_in &times; D_out is just the number of parameters in that matrix,
+				each weight contributes 2 &times; ISL FLOPs. Sum over the whole model:
+				2 &times; ISL &times; P.
+			</p>
+			<p class="text-xl leading-relaxed">
+				Everything else (norms, activations, softmax) does O(D) work per layer.
+				The matmuls do O(D&sup2;). The ratio is ~8000x for Llama 70B, so we
+				ignore everything else.
+			</p>
+		</section>
+		<section class="slide flex flex-col justify-center max-w-3xl mx-auto">
+			<h2 class="text-3xl font-semibold mb-8">What about attention?</h2>
+			<p class="text-xl leading-relaxed mb-6">
+				Self-attention has 4 &times;
+				<span class="note" data-note="Number of new tokens being processed">S</span> &times;
+				<span class="note" data-note="Number of previous tokens to attend to">T</span> &times;
+				<span class="note" data-note="Hidden dimension (8192 for Llama 70B)">D</span> &times;
+				<span class="note" data-note="Number of layers (80 for Llama 70B)">L</span> FLOPs.
+			</p>
+			<p class="text-xl leading-relaxed mb-6">
+				At prefill time (<span class="note" data-note="All input tokens processed at once">S = T = ISL</span>),
+				the arithmetic intensity is O(T), so attention is compute-bound.
+				At decode time (<span class="note" data-note="One new token per step">S = 1</span>),
+				it's O(1), so attention is bandwidth-bound. Same regimes as the matmuls.
+			</p>
+			<p class="text-xl leading-relaxed">
+				For prefill, attention FLOPs are much smaller than matmul FLOPs at the
+				sequence lengths we care about, but not negligible. We include them
+				in the prefill calculation.
+			</p>
+		</section>
+	</div>
+
+	<!-- Slide 4: Two bottlenecks -->
+	<section class="slide flex flex-col justify-center max-w-3xl mx-auto">
+		<h2 class="text-3xl font-semibold mb-8">Two bottlenecks</h2>
+		<p class="text-xl leading-relaxed mb-6">
+			<strong>Memory-bandwidth bound</strong>: compute units are starved of data.
+			We're waiting for weights to arrive.
+		</p>
+		<p class="text-xl leading-relaxed mb-6">
+			<strong>Compute bound</strong>: data arrives fast enough. Compute units
+			are fully saturated.
+		</p>
+		<p class="text-xl leading-relaxed mb-6">
+			Which regime we're in depends on the number of tokens processed
+			simultaneously. Above a threshold, we're compute-bound. Below it,
+			bandwidth-bound.
+		</p>
+		<div class="my-8">
+			<FormulaThreshold client:load />
+		</div>
+	</section>
+
+	<!-- Slide 5: Prefill and decode -->
+	<section class="slide flex flex-col justify-center max-w-3xl mx-auto">
+		<h2 class="text-3xl font-semibold mb-8">Prefill and decode</h2>
+		<p class="text-xl leading-relaxed mb-6">
+			Inference has two phases. They land in different regimes:
+		</p>
+		<p class="text-xl leading-relaxed mb-6">
+			<strong>Prefill</strong>: process the entire input prompt in parallel.
+			Tokens at once = ISL. Well above the threshold.
+			<strong>Compute-bound.</strong>
+		</p>
+		<p class="text-xl leading-relaxed">
+			<strong>Decode</strong>: generate one token per sequence per step.
+			Tokens at once = number of concurrent users. Typically well below the threshold.
+			<strong>Bandwidth-bound.</strong>
+		</p>
+	</section>
+
+	<!-- Slide 6: Prefill time -->
+	<section class="slide flex flex-col justify-center max-w-3xl mx-auto">
+		<h2 class="text-3xl font-semibold mb-8">How long to process a prompt?</h2>
+		<p class="text-xl leading-relaxed mb-6">
+			Prefill is compute-bound. Time = work &divide; compute:
+		</p>
+		<div class="my-8">
+			<FormulaPrefill client:load />
+		</div>
+	</section>
+
+	<!-- Slide 7: Decode time -->
+	<section class="slide flex flex-col justify-center max-w-3xl mx-auto">
+		<h2 class="text-3xl font-semibold mb-8">How long to generate a token?</h2>
+		<p class="text-xl leading-relaxed mb-6">
+			Decode is bandwidth-bound. Each step reads all weights plus
+			KV cache for every concurrent sequence. Time = bytes &divide; bandwidth:
+		</p>
+		<div class="my-8">
+			<FormulaDecode client:load />
+		</div>
+	</section>
+
+	<!-- Slide 8: Putting it together -->
+	<section class="slide flex flex-col justify-center max-w-3xl mx-auto">
+		<h2 class="text-3xl font-semibold mb-8">Putting it together</h2>
+		<FormulaE2E client:load />
+	</section>
+
+	<!-- Slide 7: Reality check (with chart sub-slides) -->
+	<div class="slide-stack">
+		<section class="slide flex flex-col justify-center max-w-3xl mx-auto">
+			<h2 class="text-3xl font-semibold mb-8">Reality check</h2>
+			<p class="text-xl leading-relaxed mb-6">
+				How close do real systems get to these limits?
+			</p>
+			<p class="text-xl leading-relaxed mb-6">
+				InferenceMAX benchmarks (Llama 70B, various accelerators): real
+				systems achieve <strong>20-50%</strong> of theoretical peak throughput.
+			</p>
+			<p class="text-xl leading-relaxed">
+				The gap comes from framework overhead, imperfect comms overlap
+				between GPUs, non-ideal kernels, and scheduling inefficiencies.
+				But the model gives us the right ceiling.
+			</p>
+		</section>
+		<section class="slide flex flex-col justify-center max-w-4xl mx-auto">
+			<h2 class="text-3xl font-semibold mb-4">Throughput: theory vs reality</h2>
+			<ThroughputChart client:load />
+		</section>
+		<section class="slide flex flex-col justify-center max-w-4xl mx-auto">
+			<h2 class="text-3xl font-semibold mb-4">Latency: theory vs reality</h2>
+			<LatencyChart client:load />
+		</section>
+	</div>
+
+	<!-- Slide 8: The batch insight -->
+	<section class="slide flex flex-col justify-center max-w-3xl mx-auto">
+		<h2 class="text-3xl font-semibold mb-8">Why batch is cheaper</h2>
+		<p class="text-xl leading-relaxed mb-6">
+			A real-time API is latency-constrained. Each user is waiting, so
+			you can't increase the batch size without increasing their wait.
+			Decode stays bandwidth-bound. Compute units sit idle.
+		</p>
+		<p class="text-xl leading-relaxed mb-6">
+			A batch API doesn't have this constraint. We can accumulate requests
+			and run at much higher batch sizes. Push decode toward compute-bound.
+			Both bottlenecks saturated.
+		</p>
+		<p class="text-xl leading-relaxed">
+			Better utilization, same hardware, lower cost per token.
+		</p>
+	</section>
+
+	<!-- Slide 9: CTA -->
+	<section class="slide flex flex-col items-center justify-center text-center">
+		<h2 class="text-4xl font-semibold mb-6">Try the batch API</h2>
+		<p class="text-2xl mb-8">Same models, lower cost, higher throughput.</p>
+		<p class="text-2xl font-mono text-primary dark:text-primary-dark">app.doubleword.ai</p>
+	</section>
+
+</SlideDeckLayout>

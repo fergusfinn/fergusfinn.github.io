@@ -1,0 +1,19 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro'
+---
+
+<BaseLayout title="Talks">
+	<main class="app-container py-24">
+		<div class="max-w-3xl mx-auto">
+			<h1 class="text-4xl sm:text-5xl leading-snug pt-4 xl:pt-8 font-bold">Talks</h1>
+			<ul class="mt-8 space-y-6">
+				<li>
+					<a href="/talks/inference-arithmetic" class="text-primary dark:text-primary-dark hover:opacity-75 transition-opacity text-xl">
+						How fast can an LLM go?
+					</a>
+					<p class="opacity-60 text-sm mt-1">Inference arithmetic for LLM serving</p>
+				</li>
+			</ul>
+		</div>
+	</main>
+</BaseLayout>
