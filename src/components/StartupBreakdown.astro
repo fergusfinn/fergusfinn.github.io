@@ -1,0 +1,284 @@
+---
+interface Phase {
+  name: string;
+  seconds: number;
+  color: string;
+  tooltip?: string;
+}
+
+interface Bar {
+  label: string;
+  phases: Phase[];
+}
+
+interface Props {
+  bars: Bar[];
+  maxSeconds?: number;
+  showLegend?: boolean;
+}
+
+const { bars, maxSeconds: maxSecondsProp, showLegend = true } = Astro.props;
+
+const COLORS: Record<string, string> = {
+  'Container start': '#7a8a7a',
+  'Python imports': '#5b7b9a',
+  'HF config + tokenizer': '#6b9aaa',
+  'Weight loading': '#8faa6e',
+  'FlashInfer autotune': '#c4956a',
+  'CUDA graph capture': '#a07eb5',
+  'Server warmup': '#cc7e7e',
+  'Container setup': '#7a8a7a',
+  'CRIU process restore': '#6b8a9a',
+  'CUDA plugin': '#a07eb5',
+  'Weight reload': '#8faa6e',
+  'Wake + reload': '#8faa6e',
+};
+
+const hasFractionalTiming = bars.some((bar) =>
+  bar.phases.some((phase) => !Number.isInteger(phase.seconds))
+);
+
+function formatSeconds(seconds: number): string {
+  if (!hasFractionalTiming) {
+    return `${Math.round(seconds)}s`;
+  }
+  return `${seconds.toFixed(1)}s`;
+}
+
+// Compute scale
+const maxSeconds = maxSecondsProp ?? Math.max(...bars.map(b => b.phases.reduce((sum, p) => sum + p.seconds, 0)));
+
+const tickAreaHeight = 28;
+const barHeight = 36;
+const labelWidth = 100;
+const chartWidth = 440;
+const rightMargin = 45;
+const totalWidth = labelWidth + chartWidth + rightMargin;
+const barGap = 18;
+
+// Legend
+const allPhaseNames = [...new Set(bars.flatMap(b => b.phases.map(p => p.name)))];
+
+const legendItemWidth = 180;
+const legendCols = 2;
+const legendRows = Math.ceil(allPhaseNames.length / legendCols);
+const legendHeight = showLegend ? legendRows * 22 + 10 : 0;
+const legendPadding = showLegend ? 40 : 0;
+
+const barsAreaHeight = bars.length * (barHeight + barGap) - barGap;
+const totalHeight = tickAreaHeight + barsAreaHeight + legendPadding + legendHeight;
+---
+
+<div class="startup-breakdown" style="position: relative; width: 100%; max-width: 720px;">
+  <svg
+    viewBox={`0 0 ${totalWidth} ${totalHeight}`}
+    xmlns="http://www.w3.org/2000/svg"
+    style="width: 100%; height: auto;"
+    role="img"
+    aria-labelledby="chart-title"
+  >
+    <title id="chart-title">SGLang startup time breakdown</title>
+
+    {/* Time markers above first bar */}
+    {(() => {
+      const firstBar = bars[0];
+      let cumulative = 0;
+      const markers: { x: number; label: string }[] = [];
+
+      markers.push({ x: labelWidth, label: formatSeconds(0) });
+
+      for (const phase of firstBar.phases) {
+        cumulative += phase.seconds;
+        const x = labelWidth + (cumulative / maxSeconds) * chartWidth;
+        markers.push({ x, label: formatSeconds(cumulative) });
+      }
+
+      return markers.map((m) => (
+        <g>
+          <line
+            x1={m.x}
+            y1={tickAreaHeight - 4}
+            x2={m.x}
+            y2={tickAreaHeight}
+            stroke="#999"
+            stroke-width="1"
+          />
+          <text
+            x={m.x}
+            y={tickAreaHeight - 7}
+            text-anchor="middle"
+            font-family="'Source Sans 3', sans-serif"
+            font-size="12"
+            fill="#888"
+          >
+            {m.label}
+          </text>
+        </g>
+      ));
+    })()}
+
+    {bars.map((bar, i) => {
+      const y = tickAreaHeight + i * (barHeight + barGap);
+      const total = bar.phases.reduce((sum, p) => sum + p.seconds, 0);
+      let x = labelWidth;
+
+      return (
+        <g>
+          <text
+            x={labelWidth - 10}
+            y={y + barHeight / 2 + 5}
+            text-anchor="end"
+            font-family="'Source Sans 3', sans-serif"
+            font-size="13"
+            fill="#444"
+          >
+            {bar.label}
+          </text>
+
+          {bar.phases.map((phase) => {
+            const width = (phase.seconds / maxSeconds) * chartWidth;
+            const segX = x;
+            x += width;
+            const color = COLORS[phase.name] ?? '#999';
+            const tip = phase.tooltip ?? `${phase.name}: ${phase.seconds}s`;
+            return (
+              <rect
+                x={segX}
+                y={y}
+                width={width}
+                height={barHeight}
+                fill={color}
+                rx="1"
+                class="phase-segment"
+                data-tooltip={tip}
+                style="cursor: pointer;"
+              />
+            );
+          })}
+
+          <text
+            x={x + 8}
+            y={y + barHeight / 2 + 5}
+            font-family="'Source Sans 3', sans-serif"
+            font-size="13"
+            font-weight="600"
+            fill="#333"
+          >
+            {formatSeconds(total)}
+          </text>
+        </g>
+      );
+    })}
+
+    {/* Legend */}
+    {showLegend && allPhaseNames.map((name, i) => {
+      const col = i % legendCols;
+      const row = Math.floor(i / legendCols);
+      const lx = labelWidth + col * legendItemWidth;
+      const ly = tickAreaHeight + barsAreaHeight + 20 + row * 22;
+      const color = COLORS[name] ?? '#999';
+
+      return (
+        <g>
+          <rect x={lx} y={ly} width={12} height={12} fill={color} rx="2" />
+          <text
+            x={lx + 18}
+            y={ly + 10}
+            font-family="'Source Sans 3', sans-serif"
+            font-size="11"
+            fill="#555"
+          >
+            {name}
+          </text>
+        </g>
+      );
+    })}
+  </svg>
+
+  <div class="phase-tooltip" style="
+    display: none;
+    position: absolute;
+    background: #333;
+    color: #fff;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 13px;
+    line-height: 1.4;
+    max-width: 320px;
+    pointer-events: none;
+    z-index: 10;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  "></div>
+</div>
+
+<script>
+  document.querySelectorAll('.startup-breakdown').forEach(container => {
+    const tooltip = container.querySelector('.phase-tooltip') as HTMLElement;
+    if (!tooltip) return;
+
+    const segments = container.querySelectorAll('.phase-segment');
+    let activeSegment: Element | null = null;
+    let isTouch = false;
+
+    function showTooltip(segment: Element) {
+      const text = segment.getAttribute('data-tooltip');
+      if (!text) return;
+
+      tooltip.textContent = text;
+      tooltip.style.display = 'block';
+
+      const containerRect = container.getBoundingClientRect();
+      const segmentRect = segment.getBoundingClientRect();
+
+      let left = segmentRect.left - containerRect.left + segmentRect.width / 2;
+      let top = segmentRect.bottom - containerRect.top + 8;
+
+      const tipWidth = tooltip.offsetWidth;
+      left = Math.max(8, Math.min(left - tipWidth / 2, containerRect.width - tipWidth - 8));
+
+      tooltip.style.left = left + 'px';
+      tooltip.style.top = top + 'px';
+
+      if (activeSegment && activeSegment !== segment) {
+        (activeSegment as SVGElement).style.opacity = '1';
+      }
+      (segment as SVGElement).style.opacity = '0.8';
+      activeSegment = segment;
+    }
+
+    function hideTooltip() {
+      tooltip.style.display = 'none';
+      if (activeSegment) {
+        (activeSegment as SVGElement).style.opacity = '1';
+        activeSegment = null;
+      }
+    }
+
+    segments.forEach(seg => {
+      seg.addEventListener('mouseenter', () => {
+        if (!isTouch) showTooltip(seg);
+      });
+      seg.addEventListener('mouseleave', () => {
+        if (!isTouch) hideTooltip();
+      });
+
+      seg.addEventListener('touchstart', (e) => {
+        isTouch = true;
+        e.preventDefault();
+        if (activeSegment === seg) {
+          hideTooltip();
+        } else {
+          showTooltip(seg);
+        }
+      }, { passive: false });
+    });
+
+    document.addEventListener('touchstart', (e) => {
+      if (!container.contains(e.target as Node)) hideTooltip();
+    });
+    document.addEventListener('click', (e) => {
+      if (!container.contains(e.target as Node)) hideTooltip();
+    });
+  });
+</script>
