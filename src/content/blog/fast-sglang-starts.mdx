@@ -1,14 +1,16 @@
 ---
-title: 'Ultra fast starts for SGLang'
+title: '70x faster cold(ish) starts for SGLang'
 description: |
-  How fast can you get a 122B parameter MoE model serving on a B200?
+  Checkpoint/restore with CRIU and cuda-checkpoint, from 12 minutes to 10 seconds on a B200.
 pubDate: 'Apr 06 2026'
-index: false
+index: true
 ---
 
 import StartupBreakdown from '../../components/StartupBreakdown.astro'
 
-It takes nearly twelve minutes to start serving a 122 billion parameter MoE model[>1] on a B200 in kubernetes.
+It takes nearly twelve minutes to start serving a 122 billion parameter MoE model[>1] on a B200 in Kubernetes[>2].
+
+[>2]: MicroK8s v1.35.0, containerd 2.1.3, runc 1.2.5, NVIDIA GPU Operator v26.3.0 with CDI enabled, driver 580.126.20. 8x B200 (Blackwell, 192GB each).
 
 That's a long time.
 
@@ -16,7 +18,7 @@ That's a long time.
 
 ## Who knows where the time goes
 
-First, measure. 
+First, measure.
 
 <StartupBreakdown bars={[
   {
@@ -33,14 +35,17 @@ First, measure.
   },
 ]} />
 
-A lot of slow stuff! 21 seconds of python imports. Autotuning, JIT
-compilation. 531s of weight loading! [>3]. This all makes sense with SGLang's API contract - SGLang getting
-10% more tokens per second is worth way more than launching 10s faster, so the
-launch time creeps up and up.
+A lot of slow stuff! 21 seconds of python imports. Autotuning, JIT compilation.
+531s of weight loading![>3] To be clear, this all makes sense with SGLang's API
+contract. SGLang getting 10% more tokens per second is worth way more than
+launching 10s faster. Over time, what happens is the launch time creeps up and
+up.
 
-[>3]: I thought this was off, but it reproduces - I clear all the kernel caches, then load from scratch. It's a genuinely cold load - i.e. no page caching of the downloaded sglang image, no page caching of the downloaded model weights.
+[>3]: `echo 3 > /proc/sys/vm/drop_caches`, clear all the kernel caches, then load from scratch. I thought this number was off, but it reproduces. It's a genuinely cold load, i.e. no page caching of the downloaded sglang image, no page caching of the downloaded model weights. You'd likely never see a start this cold except post-reboot.
 
-First - SGLang stores a lot of these compiled kernels on disk - we should keep them around for next time [^1].
+Most of this startup work produces artifacts that SGLang already knows how to
+cache. Compiled kernels, autotuned configs, JIT outputs. If we persist them
+across restarts[^1], we get a warm start:
 
 
 <StartupBreakdown bars={[
@@ -58,14 +63,20 @@ First - SGLang stores a lot of these compiled kernels on disk - we should keep t
   }
 ]} />
 
-Much better. 
+Much better. The kernel caches cut most of the compilation time, and the OS
+page cache does the rest. The weights are still on disk, but once they've been
+read once, Linux keeps them in RAM. Second load reads from page cache instead
+of NVMe.
 
-We're still not doing great though. 95s! For context, the weights are 117 GB, and
-we're running on a machine with PCIe gen 5 x16, and an NVMe gen4 SSD - so 64GB/s
-theoretical host-device and 7-8GB/s theoretical disk to RAM. 
+We're still not doing great though. 88s! Only 31s of that is actually loading
+weights. The other 57s is imports, config parsing, autotuning, warmup. All
+overhead we're paying every time, even though the results are the same. The
+only irreducible part is moving 117 GB of weights onto the GPU.
 
-The realistic floor for this whole process is then either $117/8 \approx 15s$
-from disk, or $117/64 \approx 1.8s$ from RAM. Can we get close?
+On this machine we have PCIe gen 5 x16 (64 GB/s theoretical to GPU) and an
+NVMe gen4 SSD (7-8 GB/s to RAM). So the bandwidth floor for weight transfer is
+somewhere between $117/8 \approx 15s$ from disk and $117/64 \approx 1.8s$ from
+RAM. Can we get close?
 
 ## Here's one I made earlier
 
@@ -81,15 +92,17 @@ will stay rational. If we make startup fast, it will later become slow again.
 
 What we really want to do is just take everything that SGLang does on startup
 (including whatever they might choose to do in the future) and cache it, all
-together in some nice package[^2]. This sort of thing comes under the handle of
-'checkpoint/restore' for processes. The leading solution on Linux is the
-[CRIU](https://en.wikipedia.org/wiki/CRIU) project, which (with cooperation
-from the kernel) can actually checkpoint and restore process state entirely in
-user-space. It can checkpoint NVIDIA device state via its in-tree integration
-with the [cuda-checkpoint](https://github.com/NVIDIA/cuda-checkpoint) plugin.
+together in some nice package that's fast to restore from. In the systems world this is called checkpoint/restore. The leading solution on Linux is
+[CRIU](https://en.wikipedia.org/wiki/CRIU), which can checkpoint and restore a
+process tree through existing kernel APIs. Its CUDA plugin calls NVIDIA's
+[cuda-checkpoint](https://github.com/NVIDIA/cuda-checkpoint) tool to capture
+and restore GPU device state.
 
-Here's how we do when we CRIU checkpoint our SGLang process, and then restore
-from our checkpoint:
+One catch: a naive CRIU checkpoint of SGLang would include all GPU memory, 192GB
+on our B200. Most of that is weights and KV cache that SGLang already knows how
+to reload. So we strip them out, shrinking the checkpoint from 192GB to
+6.6GB, but we pay for it with a weight reload step on wake.
+Here's the restore timeline:
 
 <StartupBreakdown bars={[
   {
@@ -102,195 +115,106 @@ from our checkpoint:
   }
 ]} />
 
-Lots better! We've shaded over some very frustrating work here, that rightly
-lives in an appendix, like moving the weights outside of the CRIU checkpoint
-restore flow, how to orchestrate this process in kubernetes, and how to get
-CRIU and SGLang to play nice. 
+Lots better![>4] We've shaded over some frustrating work here: stripping weights
+and KV cache from the checkpoint[^2], packaging it as an OCI image for
+kubernetes[^3], GPU device remapping[^4], waking up after restore[^5], and
+getting CRIU and SGLang to play nice[^6].
 
-## Welcome to the machine
+[>4]: You might have noticed the weight reload dropped from 31s to 19s. More on this [later](#keep-the-home-fires-burning).
 
-32s is good, but still not great. We're spending more time on process
-orchestration than we actually are loading weights. Loading weights is slow, if
-it's not the bottleneck, something needs fixing.
+## Down to the wire
 
-The first and most visible blob is the `6s` of container setup time. Why did it
-go up from when we were launching a regular container? 
+32s, but still far from the bandwidth floor. Of the 32s, only 19s is actually
+loading weights. The other 13s is overhead: container setup (6s) and CRIU
+process restore (7s). Before we tackle the weight loading, we can cut this
+overhead roughly in half.
 
-The problem turns out to be in containerd.
-
-Most of the container-setup time was going into two needless bits of work that
-containerd does on every checkpoint restore, that it doesn't do on normal pod launches. 
-
-For every checkpoint, containerd unpacks the `tarred` checkpoint from disk to a
-staging directory, from which it launches the pod. It does this every single
-time we launch the pod. This is 6GB of disk writing, that's identical across
-restores. For normal container launches, this is skipped if it's been done
-before. This saves us a second.
-
-For every checkpoint, containerd tries to resolve the base image from the
-remote repository. This happens regardless of the pull policy. This doesn't
-happen when we're not restoring a checkpoint! If the image already exists
-locally, we don't need to go over the network. This saves us another couple seconds [>2].
-
-[>2]: My B200 machine is in Sydney. I don't know which artefact registry the
-sglang image uses, but if it's not geodistributed this might explain part of why
-this takes so long. In truth i'm not sure exactly why just querying the repo
-takes this long.
-
-- [doublewordai/containerd#1](https://github.com/doublewordai/containerd/pull/1): cache the extracted-checkpoint rootfs so subsequent restores skip the re-unpack.
-- [doublewordai/containerd#2](https://github.com/doublewordai/containerd/pull/2): resolve the base image locally instead of unconditionally calling `Pull(config.RootfsImageRef)` inside `CRImportCheckpoint`, even when the base image digest is already present on the node. This eliminated the `1.645s` warm restores were still spending inside `rootfs_image_prepare`.
-
-Together the two patches cut the container-setup phase roughly in half, from `6.0s` to `3.0s`, and tighten run-to-run variance.
+Containerd was doing redundant work on every checkpoint restore that it
+doesn't do on normal pod launches[^7]. Two patches cut container setup from
+6s to 3s. CRIU itself was also slower than it needed to be. The main fix is
+zero-copy page restore: `mmap` the checkpoint pages directly instead of
+copying them into fresh allocations[^8]. After that, most of the remaining
+CRIU time is the `cuda-checkpoint` driver call itself.
 
 <StartupBreakdown bars={[
   {
-    label: "+ containerd patches",
+    label: "+ containerd & CRIU patches",
     phases: [
       { name: "Container setup", seconds: 3.0, tooltip: "Container setup (3.0s): patched containerd reuses the extracted-checkpoint snapshot cache and resolves the base image locally; the re-unpack and re-pull are both elided" },
-      { name: "CRIU + CUDA plugin", seconds: 7.1, tooltip: "CRIU + CUDA plugin (7.1s): unchanged from baseline (stock CRIU, serial cuda-checkpoint restore)" },
-      { name: "Wake + reload", seconds: 19.0, tooltip: "Wake + reload (19.0s): unchanged from baseline; still reloading 117 GB from disk" },
-    ]
-  }
-]} />
-
-## Down where the drunkards roll
-
-We should really, if we're being principled, start hitting that big weight
-reload bit. But first, why is CRIU + checkpoint restore going so slowly? 7s to
-start a process seems like an awful lot - it's only 6GB of data on disk.
-Starting processes is milliseconds, and transferring that data (even cold from
-disk, and it's almost certainly in page cache) shouldn't take more than a
-second. CRIU makes a lot of syscalls, and does a lot of very cool stuff, but still.
-
-The optimizations break down into two bits:
-
-#### Stop CRIU from copying so much data
-
-- **Zero-copy page restore.** On restore, CRIU allocates new anonymous pages
-  and reads into them with `preadv`. The mapping is complex, so there are
-  thousands of syscalls, and even when we're hitting page cache we're going
-  through so much kernel machinery that you don't see the performance. We've
-  got the pages already, in our checkpoint, what we really want is to say to
-  the new process - 'look, here's where your pages are, get them when you need
-  them'. We can do this by making CRIU `mmap` the pages-img file directly with
-  `MAP_PRIVATE|MAP_FIXED`. Pages that are never touched stay as zero-cost
-  file-backed references; pages that get written trigger copy-on-write on first
-  write.
-
-#### Save ourselves some cuda-checkpoint work
-
-- **Parallel CUDA plugin restore.** SGLang runs three processes with meaningful
-  cuda contexts. We can fork the cuda plugin so that `--get-restore-tid`,
-  `cuda-checkpoint --action restore`, and `--action unlock` run concurrently
-  across GPU-owning processes instead of serially. I'm not sure how much value
-  this actually has - across benchmarks it's sometimes meaningful and sometimes
-  it isn't - perhaps they serialize on the device side, but sometimes the
-  pipelining seems to help.
-- **TID cache in the checkpoint.** A meaningful amount of time at restore is
-  just spent figuring out how the processes are laid out for restore - work we
-  already did on checkpoint. At checkpoint time, patched CRIU writes
-  per-process `restore_tid` values into a cache file inside the image. At
-  restore time, the plugin loads them instead of calling `cuda-checkpoint
-  --get-restore-tid` live. Each live probe costs ~1.1s on this machine, so this
-  alone saves about `0.9s`.
-
-<StartupBreakdown bars={[
-  {
-    label: "+ CRIU patches",
-    phases: [
-      { name: "Container setup", seconds: 3.0, tooltip: "Container setup (3.0s): unchanged from containerd patches" },
-      { name: "CRIU + CUDA plugin", seconds: 4.9, tooltip: "CRIU + CUDA plugin (4.9s): patched CRIU mmaps the pages-img file directly (MAP_PRIVATE|MAP_FIXED, copy-on-write) instead of preadv + anonymous pages, and the CUDA plugin loads the TID cache from the checkpoint and runs per-process cuda-checkpoint restores in parallel" },
+      { name: "CRIU + CUDA plugin", seconds: 3.5, tooltip: "CRIU + CUDA plugin (3.5s): patched CRIU mmaps the pages-img file directly (MAP_PRIVATE|MAP_FIXED, copy-on-write) instead of preadv + anonymous pages, and the CUDA plugin loads the TID cache from the checkpoint and runs per-process cuda-checkpoint restores in parallel" },
       { name: "Wake + reload", seconds: 18.0, tooltip: "Wake + reload (18.0s): unchanged; still reloading 117 GB from disk" },
     ]
   }
 ]} />
 
-At this point the container-setup and CRIU phases together take about `7.9s`;
-the restore is dominated almost entirely by the `18s` wake that reloads weights
-from disk. 
+Overhead is down to about 6.5s. That leaves the weights.
 
 ## Keep the home fires burning
 
-It's finally time to tackle the big green bit [^3]. We assume we're scaling
-from zero - i.e. we don't have a spare GPU running the same model somewhere
-else (if we did, then the nice optimization is to load it P2P over NVLink, and
-get ourselves 1.8TB/s BW). But! we do have lots of RAM on the device. The best
-we can do if we're loading from RAM is PCIe bandwidth - for this machine setup,
-64GB/s per GPU. 
+It's finally time to tackle the big green bit. We've got lots of RAM on the
+device[>5], so the best we can do is PCIe bandwidth: 64GB/s for this machine
+setup. How are we going to get there?
 
-How are we going to get there?
+[>5]: If we had a spare GPU already running the same model, we could load P2P
+over NVLink at 1.8TB/s. But we're scaling from zero here.
 
-The first thing - `/update_weights_from_disk` in SGLang (the call that powers
-our weight reload currently) has a harder job than it needs to. It's got to
-load from `safetensors` weights, figure out which allocations live where, then
-send data into those allocations. Different safetensors shards contain
-different parts of the model. 
+First, the weight reload. We sneakily dropped it from 31s in the warm start to
+19s in the restore baseline. Instead of loading from the safetensors files on
+disk (like on the initial load), on checkpoint we dump a serialized
+representation of the actual allocations[>6]. Then, when we load back, we load
+through a ring buffer with direct IO. We hit the disk ceiling pretty handily
+for this device.
 
-But we already worked all this stuff out when we
-loaded the model the first time. The reason this is what
-`update_weights_from_disk` does is it's designed for RL - where the weights on
-disk might have changed. `safetensors` is universal, so the training side of RL
-can output it, and `update_weights_from_disk` can ingest it.
+[>6]: `torch_memory_saver` interposes SGLang's CUDA allocations via virtual
+memory APIs. It already supports backing weights to CPU during
+`release_memory_occupation`, but not to disk. We add a batched device-to-host
+transfer that writes a single flat file ([doublewordai/torch_memory_saver#2](https://github.com/doublewordai/torch_memory_saver/pull/2)). On reload, we just need to get the
+allocations back into their proper places. SGLang supports this weight reload via
+`update_weights_from_disk`, but 1. it requires reload from safetensors, which
+can be slow, and 2. The reload path for lots of models drifts from the original
+load path (its actually broken for this model).
 
-But we don't care about universality, we just want the model to come up fast.
-The [`torch_memory_saver`](https://github.com/fzyzcjy/torch_memory_saver) library
-that SGLang uses interposes all of SGLang's cuda allocations, and uses CUDA
-virtual memory APIs to keep SGLang's allocation in place while we
-`release_memory_occupation`. It supports backing the weights up to CPU when it
-does that, but it doesn't support backing them up to disk.
+But the disk ceiling is is pretty low. We want the RAM ceiling: 1.8s. We can
+add faster disks, GPU Direct Storage, all this stuff. But if we don't want to
+re-spec our machine, and, like I do here, we've just got an NVMe-backed virtio
+disk, we need to get the weights into RAM before the restore starts.
 
-So we add that. We write in a batched device-to-host transfer from torch memory
-saver when it is called upon to `release_memory_occupation`. Then on reload,
-our job is much simpler - we just need to get the allocations back into their
-proper places, from disk. This chops off a little bit of the weight reload from
-disk overhead (most importantly - `update_weights_from_disk` is broken for lots
-of models. The reason is that it drifts in the code from the original load
-path. By making our own checkpoint restore path for the weights, we're not
-dependent on this RL path.)
+The problem is, by definition, the process doesn't exist before it starts
+restoring. So it's going to have to get this RAM-backed weights file from
+someone else.
 
-Now - we've got a ~118GB single file that we want to load onto a GPU as fast
-as we possibly can. We can add some fast disks, add GPU Direct Storage (GDS),
-do all this stuff. But if we don't want to re-spec our machine, and, like I do
-here, we've just got an NVMe virtio disk, what can we do? 
+This 'someone else' is a daemon on the node, whose job is to watch the weights
+checkpoint directory and stage its contents into RAM. It exposes a unix socket
+to restored containers. On wake, `torch_memory_saver` queries the socket. If
+the daemon has the weights staged, it passes the file descriptor over and
+reload happens from RAM instead of disk. Otherwise, we fall back to regular
+restore. Depending on how much memory you give the daemon, the chance of a
+cache hit can be very high or very low[>7].
 
-We've got to get our weights into RAM before our checkpoint starts restoring.
-But the process doesn't exist before it starts restoring. So it's going to have
-to get this RAM backed 'weights file' from someone else.
+[>7]: The daemon can also partially stage: it hands out a pre-populated ring
+buffer, which it refills from disk as the consumer drains it.
 
-We run a 'daemon' on the device, whose job is to watch the 'weights checkpoint'
-directory, and read their contents into RAM buffers. It exposes a unix socket
-to the restored containers. Our `torch_memory_saver`, when reloading from disk,
-first queries this unix socket. If our daemon has the weights staged, it passes
-the FD to the RAM backed ring buffer the weights are staged in over the socket
-to the restore process, and reload happens from RAM instead of disk. Otherwise,
-we fall back to regular restore. Depending on how much memory you give the
-daemon, the chance of a 'cache hit' can be very high or very low.
+The remaining problem is getting 118GB from RAM to the GPU quickly. A naive
+`cudaMemcpy` from an unpinned buffer gets nowhere near PCIe speeds. You need
+the driver to know the buffer is stable in RAM, so it can issue DMA directly.
+But the registration call (`cudaHostRegister`) is slow, scaling with the number
+of pages backing the buffer. We solve this with hugepages (fewer pages to
+register) and by pipelining registration with the transfer[>8].
 
-So the problem becomes - how do you load quickly to device from RAM? If you
-just take a RAM buffer and try to H2D transfer it, you get nowhere near PCIe
-speeds. The problem is you really need the driver to know about it and to know
-that it's in a nice stable location in RAM. Then you can do a 'pinned' host to
-device transfer, where loads are issued straight from RAM to the device as DMA.
-
-But this 'registration' process is slow. It scales with the number of `pages`
-that back your RAM buffer. We do two things: 
-1. `hugepages` - the linux kernel can back a memory buffer by regular `4KiB`
-   pages, _or_, if you want, you can use 2MB (or even 1Gi) 'hugepages'. Larger
-   pages, mean fewer pages per GB, mean fewer page faults, mean lower
-   registration overhead. The daemon owns a pool of hugepages, which it
-   allocates into, and hands out over its socket.
-
-2. `pipelining` - I didn't think this would work, but it really does seem to.
-   You need to get your buffer registered with the device, and then you need to
-   copy the data over to the device. You could call `cudaHostRegister` on the
-   whole thing, then `cudaMemcpy` on the whole thing. The advice I've seen is
-   that this is rarely worth doing, since the `cudaHostRegister` overhead will
-   kill the transfer benefit. This seems not to be the case with hugepages. And also!
-   apparently we can do both registration and copying at once (this ought not
-   to be too surprising I guess, but I expected them to serialize - otherwise,
-   why don't we just do this all the time instead of CPU bounce buffers). So
-   you first register a block, then issue an async H2D copy on that block.
-   While that copy is executing, you register the next block, &c. &c.
+[>8]: The linux kernel can back a buffer by regular 4KiB pages, or by 2MB (or
+1GiB) hugepages. Fewer pages per GB means lower registration overhead. The
+daemon owns a pool of hugepages, allocates into them, and hands them out over
+its socket. For the pipeline: you register a block, then issue an async H2D
+copy on that block. While that copy is executing, you register the next block.
+I didn't think this would work (the advice I've seen is that `cudaHostRegister`
+overhead kills the transfer benefit) but it really does seem to with hugepages.
+And apparently registration and copying don't serialize. I expected them to,
+otherwise why don't we just do this all the time instead of CPU bounce buffers.
+The consumer side is a short ceremony: open a Unix socket, receive the shared
+memory fd via `SCM_RIGHTS`, `mmap` it in-process, `cudaHostRegister` each
+1 GiB span (pipelined with the H2D DMA), and copy to GPU. Operationally it's
+a `DaemonSet` that owns the hugepage reservation, and restored pods just mount
+the checkpoint directory plus the Unix socket ([doublewordai/torch_memory_saver#3](https://github.com/doublewordai/torch_memory_saver/pull/3)).
 
 The net effect is big:
 
@@ -310,8 +234,7 @@ GB/s is perhaps a more realistic expectation), but it's dead fast.
 
 ## Conclusion
 
-Here are all six reload paths on the same absolute scale. The optimizations
-attack different phases and stack cleanly.
+Here are all the reload paths on the same absolute scale:
 
 <StartupBreakdown bars={[
   {
@@ -347,18 +270,10 @@ attack different phases and stack cleanly.
     ]
   },
   {
-    label: "+ containerd patches",
+    label: "+ containerd & CRIU patches",
     phases: [
-      { name: "Container setup", seconds: 3.0, tooltip: "Container setup (3.0s): extracted-checkpoint cache hit + local base-image resolve" },
-      { name: "CRIU + CUDA plugin", seconds: 7.1, tooltip: "CRIU + CUDA plugin (7.1s): unchanged (stock CRIU)" },
-      { name: "Wake + reload", seconds: 19.0, tooltip: "Wake + reload (19.0s): unchanged; still reloading 117 GB from disk" },
-    ]
-  },
-  {
-    label: "+ CRIU patches",
-    phases: [
-      { name: "Container setup", seconds: 3.0, tooltip: "Container setup (3.0s): unchanged" },
-      { name: "CRIU + CUDA plugin", seconds: 4.9, tooltip: "CRIU + CUDA plugin (4.9s): zero-copy mmap of pages-img + TID cache + parallel per-process cuda-checkpoint restore" },
+      { name: "Container setup", seconds: 3.0, tooltip: "Container setup (3.0s): patched containerd reuses extracted-checkpoint cache and resolves base image locally" },
+      { name: "CRIU + CUDA plugin", seconds: 3.5, tooltip: "CRIU + CUDA plugin (3.5s): zero-copy mmap of pages-img + TID cache + parallel per-process cuda-checkpoint restore" },
       { name: "Wake + reload", seconds: 18.0, tooltip: "Wake + reload (18.0s): unchanged; still reloading 117 GB from disk" },
     ]
   },
@@ -372,148 +287,24 @@ attack different phases and stack cleanly.
   },
 ]} showLegend={false} />
 
-We got 70 times faster (or 9x faster if you're using the more realistic baseline).
+9.6s. 70x faster than cold, 9x faster than a warm start. Most of what's left
+is the `cuda-checkpoint` driver call (3.5s) and the weight DMA (3.1s at
+38 GB/s). The theoretical floor is around 1.8s. We're not there yet, but we're getting close[^9].
 
-But why are we still so slow?
+[^1]: Kernel caches to persist across restarts:
+    - FlashInfer kernel cache (`~/.cache/flashinfer`)
+    - Triton kernel cache (`TRITON_HOME`, defaults to `~/.triton`)
+    - Torchinductor cache (`TORCHINDUCTOR_CACHE_DIR`)
+    - TVM FFI cache (`~/.cache/tvm-ffi`)
+    - FlashAttention CUTE DSL cache (`FLASH_ATTENTION_CUTE_DSL_CACHE_ENABLED=1`, `FLASH_ATTENTION_CUTE_DSL_CACHE_DIR`)
+[^2]: CRIU's integration with cuda-checkpoint goes in stages - the plugin first calls `cuda-checkpoint` to move the GPU allocations & device state into host RAM, and then that host RAM gets serialized by CRIU to disk. Since the B200 we're running this experiment on has 192GB RAM - this means we get a 192GB checkpoint (actually substantially larger, since we store all the host memory the process holds too). Writing and reading these whole device checkpoints to and from disk takes an age. And `cuda-checkpoint` by itself gets nowhere near PCIe bandwidth even for its part of the checkpoint process. The problem is that we're pulling a lot of stuff that SGLang already does really well into our checkpointing process. **KV Cache**: We're checkpointing the entire state of the KV cache. This is nice! but it's also completely unnecessary. The KV cache memory hierarchy - where we have KV cache pools on Peers, RAM, Disk, Object storage - paged in on demand into a running SGLang server, is one of core functionalities of modern distributed inference frameworks. So we should just throw away our KV cache - if we need it back, there are better places to get it. Once we do this, then our checkpoint size scales with the size of the weights, but not the size of the GPU. **Weights**: Putting the weights into the checkpoint runs them through a process that, again, SGLang is tightly optimized to do better. Just throw them away! SGlang knows how to load weights at near NVMe speeds. It can even do it via its [RL API](https://docs.sglang.io/advanced_features/sglang_for_rl.html) - just add `--enable-memory-saver` to the SGLang invocation, then call `/release_memory_occupation`, `/resume_memory_occupation` and `/update_weights_from_disk`. Once we do this, the checkpoint size is only the host memory, the CUDA + torch state that's left on the GPU when no weights are allocated. The average checkpoint size is about `6.6GB` - about 30x smaller.
+[^3]: A CRIU checkpoint is a specific set of files on disk. But we want to get back to where we started. `criu restore` will take those files, and rebuild the process on the host - we can get a running process that looks exactly like our original one. But our original target wasn't a process running happily unisolated on the host, it was a container running in kubernetes. So we don't just need to restart the process. We need to 'reschedule a pod'. We need to build a packaging format or orchestration system such that we can tell Kubernetes that we want to schedule a 'checkpoint restore' - not to start a process from scratch. Checkpoint/restore has been moving into kubernetes core for a [while](https://kubernetes.io/docs/reference/node/kubelet-checkpoint-api/). The kubelet even has an HTTP API for creating a checkpoint. I found generally that this didn't expose enough control to get this performant enough (it tells a lower layer (runc) to checkpoint, but doesn't let you configure _how_ it tells it). So instead, we build our checkpointing flow on `runc` itself, run from the host on which we make our checkpoint. To create a checkpoint that can be restored by `containerd` (the kubernetes container runtime I'm using) requires a specific image format, and an annotation to indicate that containerd should restore it using CRIU instead of just launching its entrypoint. The result is a standard OCI image - it can be pushed & pulled from a repository, run on different nodes, etc.
+[^4]: The restored container, by default, looks exactly like the original one. This is obviously kinda the goal - but it has a few interesting implications. For one - say you have a machine with 8 GPUs, and you take your checkpoint on device 4. When you restore, your checkpointed container might get device 2 from the GPU operator. But it will still restore onto device 4! All the information on what device it owns gets baked into the checkpoint, and all the clever CDI kubernetes stuff gets skipped completely. So you have to build a flow to remap the GPU ids inside the checkpoint. This requires support from the driver for 'device migration' - which only landed in driver version `580`. And you have to remember in an accessible format in the checkpoint image what devices are baked into the cuda context, so you can then pass them to the `cuda-checkpoint` tool and remap them to their new, CDI allocated GPUs when CRIU runs `cuda-checkpoint restore`. We just write the device identities into a container layer (since we have it at checkpoint time).
+[^5]: Ideally - 'reschedule a pod' means just that - write a kubernetes manifest and apply it. You don't want to have to do any extra work to load these checkpoints above and beyond scheduling the original pods[>9]. But we just said in the last section that we wanted SGLang to cooperate with us - which means that we need to call its HTTP API after restore! The way we get around this is with a neat trick. We can get the container to 'wake itself up'. The way we do it is, when we make the checkpoint, we inject a process (with `kubectl exec`) into the container's process tree. This process polls constantly for the existence of a specific file, and when that file exists, calls `/restore_memory_occupation` (and whatever other post restore hooks we might want to call). Then, when CRIU checkpoints the process, this process gets quiesced and bundled up with the SGLang process. When the image is stopped on disk, we write the file that the process polls for into the OCI image. Then - on restore, since the file exists, the 'helper' will immediately enter its wake flow!
 
-## Appendix: How to get SGLang to cooperate
+[>9]: For example, dynamo's snapshot framework runs a persistent root daemon that takes over more control of the snapshot restore. This gives them lots more control, but has more moving parts.
 
-CRIU's integration with cuda-checkpoint goes in stages - the plugin first
-calls `cuda-checkpoint` to move the GPU allocations & device state into
-host RAM, and then that host RAM gets serialized by CRIU to disk.
-Since the B200 we're running this experiment on has 192GB RAM - this means
-we get a 192GB checkpoint (actually substantially larger, since we store all
-the host memory the process holds too). 
-
-Writing and reading these whole device checkpoints to and from disk takes an
-age. And `cuda-checkpoint` by itself gets nowhere near PCIe bandwidth even for
-its part of the checkpoint process. 
-
-The problem is that we're pulling a lot of stuff that SGLang already does
-really well into our checkpointing process.
-
-1. **KV Cache**: We're checkpointing the entire state of the KV cache. This is
-   nice! but it's also completely unnecessary. The KV cache memory hierarchy -
-   where we have KV cache pools on Peers, RAM, Disk, Object storage - paged in
-   on demand into a running SGLang server, is one of core functionalities of
-   modern distributed inference frameworks. So we should just throw away our KV
-   cache - if we need it back, there are better places to get it. Once we do
-   this, then our checkpoint size scales with the size of the weights, but not
-   the size of the GPU.
-2. **Weights**: Putting the weights into the checkpoint runs them through a
-   process that, again, SGLang is tightly optimized to do better. Just throw
-   them away! SGlang knows how to load weights at near NVMe speeds. It can even
-   do it via its [RL
-    API](https://docs.sglang.io/advanced_features/sglang_for_rl.html) - just
-    add `--enable-memory-saver` to the SGLang invocation, then call
-    `/release_memory_occupation`, `/resume_memory_occupation` and
-    `/update_weights_from_disk`. 
-
-Once we do this, the checkpoint size is only the host memory, the CUDA + torch
-state that's left on the GPU when no weights are allocated. The average
-checkpoint size is about `6.6GB` - about 30x smaller. 
-
-### Orchestration and packaging
-
-A CRIU checkpoint is a specific set of files on disk. But we want to get back
-to where we started. `criu restore` will take those files, and rebuild the
-process on the host - we can get a running process that looks exactly like our
-original one. 
-
-But our original target wasn't a process running happily unisolated on the
-host, it was a container running in kubernetes. So we don't just need to
-restart the process. We need to 'reschedule a pod'. This means a couple things:
-1. We need to build a packaging format or orchestration system such that we can
-   tell Kubernetes that we want to schedule a 'checkpoint restore' - not to
-   start a process from scratch. Checkpoint/restore has been moving into
-   kubernetes core for a
-   [while](https://kubernetes.io/docs/reference/node/kubelet-checkpoint-api/).
-   The kubelet even has an HTTP API for creating a checkpoint. I found
-   generally that this didn't expose enough control to get this performant
-   enough (it tells a lower layer (runc) to checkpoint, but doesn't let you
-   configure _how_ it tells it). So instead, we build our checkpointing flow on
-   `runc` itself, run from the host on which we make our checkpoint. 
-
-   To create a checkpoint that can be restored by `containerd` (the kubernetes
-   container runtime I'm using) requires a specific image format, and an annotation to indicate
-   that containerd should restore it using CRIU instead of just launching its
-   entrypoint. The result is a standard OCI image - it can be pushed & pulled
-   from a repository, run on different nodes, etc. 
-2. The restored container, by default, looks exactly like the original one.
-   This is obviously kinda the goal - but it has a few interesting
-   implications. For one - say you have a machine with 8 GPUs, and you take
-   your checkpoint on device 4. When you restore, your checkpointed container
-   might get device 2 from the GPU operator. But it will still restore onto
-   device 4! All the information on what device it owns gets baked into the
-   checkpoint, and all the clever CDI kubernetes stuff gets skipped completely. 
-
-   So you have to build a flow to remap the GPU ids inside the checkpoint. This
-   requires support from the driver for 'device migration' - which only landed
-   in driver version `580`. And you have to remember in an accessible format in
-   the checkpoint image what devices are baked into the cuda context, so you
-   can then pass them to the `cuda-checkpoint` tool and remap them to their
-   new, CDI allocated GPUs when CRIU runs `cuda-checkpoint restore`. We just
-   write the device identities into a container layer (since we have it at
-   checkpoint time)
-3. Ideally - 'reschedule a pod' means just that - write an kubernetes manifest
-   and apply it. You don't want to have to do any extra work to load these
-   checkpoints above and beyond scheduling the original pods[>1]. But we just
-   said in the last section that we wanted SGLang to cooperate with us - which
-   means that we need to call its HTTP API after restore! The way we get around
-   this is with a neat trick. We can get the container to 'wake itself up'. The
-   way we do it is, when we make the checkpoint, we inject a process (with
-   `kubectl exec`) into the container's process tree. This process polls
-   constantly for the existence of a specific file, and when that file exists,
-   calls `/restore_memory_occupation` (and whatever other post restore hooks we
-   might want to call). Then, when CRIU checkpoints the process, this process
-   gets quiesced and bundled up with the SGLang process. When the image is
-   stopped on disk, we write the file that the process polls for into the OCI
-   image. Then - on restore, since the file exists, the 'helper' will
-   immediately enter its wake flow!
-
-
-[>1]: For example, dynamo's snapshot framework runs a persistent root daemon
-that takes over more control of the snapshot restore. This gives them lots more
-control, but has more moving parts.
-
-### Making a checkpoint-able SGLang
-
-Lots of things can make containers and pods hard to checkpoint/restore.
-Important ones:
-1. Threads that hold a cuda context but don't have anything resident on the
-   device. `cuda-checkpoint` ends up choking on them. For SGLang these come
-   from `torchinductor`'s compilation process. So we set
-   `TORCHINDUCTOR_COMPILE_THREADS=1`, so no spare threads get created.
-2. In k8s, lots of stuff in the pod will bind to the pods IP instead of
-   localhost. When the checkpoint is restored, the pod will have a different
-   IP, and everything dies. The solution is to get everything in SGLang that
-   listens on TCP to bind either `0.0.0.0` (i.e. all interfaces) or localhost. 
-   For single GPU pods, `GLOO_SOCKET_IFNAME=lo` suffices. MultiGPU pods are a
-   whole other kettle of fish that we can go into later.
-3. `io_uring` SGLang uses `io_uring` via `uvloop`. `io_uring` can't be
-   checkpointed yet. There's an environment variable to force `uvloop` onto
-   epoll, but it's (if nothing else needs it) easier to just disable it on the
-   host `sudo sysctl -w kernel.io_uring_disabled=2`.
-4. `HF_HUB_OFFLINE=1`: Prevents outbound TCP connections to Hugging Face Hub.
-  With `tcp-established` in `runc.conf`, any active TCP connection at
-  checkpoint time gets preserved. Outbound connections to external hosts would
-  fail on restore in a new pod network context, so models should be downloaded
-  on the host first. So download all the models first into a mounted dir.
-
-[^1]: - Persist the FlashInfer kernel cache (`~/.cache/flashinfer`)
-    - Persist the triton kernel cache (`TRITON_HOME`, defaults to `~/.triton`)
-    - Persist the torchinductor cache (`TORCHINDUCTOR_CACHE_DIR`)
-    - Persist the TVM FFI cache (`~/.cache/tvm-ffi`)
-    - Enable and persist the FlashAttention CUTE DSL cache (`FLASH_ATTENTION_CUTE_DSL_CACHE_ENABLED=1`, `FLASH_ATTENTION_CUTE_DSL_CACHE_DIR`)
-[^2]: - Checkpoint the running sglang process using [CRIU](https://criu.org/) 4.2 with the CUDA plugin (driver 580+)
-    - Package the checkpoint into an OCI image (6.6 GB after sleep API offloads weights)
-    - Relevant env vars: `LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/cuda_runtime/lib:${LD_LIBRARY_PATH:-}`, `GLOO_SOCKET_IFNAME=lo`, `HF_HUB_OFFLINE=1`, `TORCHINDUCTOR_COMPILE_THREADS=1`, `TMS_TAG_DISK_BACKUP_LOC_WEIGHTS`, `TMS_SGLANG_WEIGHTS_ARTIFACT_BACKEND=disk`, `TMS_SGLANG_WEIGHTS_ARTIFACT_PATH`
-    - Relevant SGLang flag: `--enable-memory-saver`
-    - Inference mode patch: [sgl-project/sglang#21035](https://github.com/sgl-project/sglang/pull/21035)
-    - Checkpoint tooling: [`warmstart`](https://github.com/doublewordai/cuda-checkpoint-experiments)
-[^3]: - Keep the checkpoint/restore flow, but stop treating weight reload as an unavoidable disk read on wake
-    - Run a node-local `torch_memory_saver` daemon that watches the checkpoint directory and stages artifacts into hugepage-backed shared buffers
-    - Let restored SGLang processes attach to that staged buffer and restore from host RAM at PCIe speed instead of reloading weights from disk
-    - Keep the disk artifact as the source of truth; the daemon is just an accelerator for the wake path
-    - This is operationally clean in Kubernetes: a `DaemonSet` owns the hugepage reservation, and restored pods just mount the checkpoint directory plus a Unix socket
-    The consumer side is a short ceremony: open a Unix socket, receive the shared memory fd via `SCM_RIGHTS`, `mmap` it in-process, `cudaHostRegister` each `1 GiB` span (pipelined with the H2D DMA), and copy to GPU. `update_weights_from_disk` is never called. The shared-ring drain itself moves `117 GB` at about `38 GB/s` effective, which takes `~3s` end-to-end.
+[^7]: Containerd re-extracts the checkpoint tarball to a staging directory on every restore (6GB of disk writing, identical each time), and resolves the base image from a remote registry regardless of pull policy. For normal container launches both are skipped if they've been done before. My B200 machine is in Sydney, so the registry round-trip is especially painful. [doublewordai/containerd#1](https://github.com/doublewordai/containerd/pull/1) caches the extracted-checkpoint rootfs so subsequent restores skip the re-unpack. [doublewordai/containerd#2](https://github.com/doublewordai/containerd/pull/2) resolves the base image locally instead of unconditionally calling `Pull(config.RootfsImageRef)` inside `CRImportCheckpoint`.
+[^8]: 7s to restore a 6.6GB checkpoint seems like a lot. Starting processes is milliseconds, and transferring that data shouldn't take more than a second even cold from disk. CRIU makes a lot of syscalls, and does a lot of very cool stuff, but still. The biggest win is **zero-copy page restore**: instead of allocating anonymous pages and reading into them with `preadv` (thousands of syscalls), we `mmap` the pages-img file directly with `MAP_PRIVATE|MAP_FIXED`. Pages that are never touched stay as zero-cost file-backed references; pages that get written trigger copy-on-write ([doublewordai/criu#2](https://github.com/doublewordai/criu/pull/2)). The other wins are smaller: parallelising the `cuda-checkpoint` plugin across SGLang's three GPU-owning processes instead of running them serially ([doublewordai/criu#1](https://github.com/doublewordai/criu/pull/1)), and caching per-process `restore_tid` values at checkpoint time so we don't have to probe for them on restore. Each live probe costs ~1.1s; caching saves about 0.9s ([doublewordai/criu#4](https://github.com/doublewordai/criu/pull/4)).
+[^9]: Where could each phase go from here? **Container setup (3.0s)** is containerd and runc doing their thing. If we didn't want to run in k8s, this would all disappear. Smaller or flatter container images might help too; this is general-purpose container orchestration optimization. **CRIU + cuda-checkpoint (3.5s)**: zero-copy page restore means CRIU itself is fast. We can make it faster by being more invasive in SGLang with regards to what ends up in the checkpoint (reducing threads, being parsimonious with host-side memory), but most of this time is the `cuda-checkpoint` driver call restoring GPU context, which is in NVIDIA's hands. **Weight reload (3.1s)**: 38 GB/s effective out of a theoretical 64 GB/s. The gap is mostly `cudaHostRegister` overhead that doesn't fully overlap with the DMA (empirically doesn't improve with 1 GiB pages either). The larger refactor is to give the daemon its own CUDA context and have it start transferring to the device as the container is starting (or before, if no other container is running), passing device-side allocations over CUDA IPC. The daemon could keep its buffers registered between loads, bringing the transfer down to the PCIe ceiling and potentially hiding it behind the cuda-checkpoint restore. Another trick: this machine has 8 PCIe x16 slots connected via NVLink (1.8 TB/s). We could load 1/8 of the weights through each slot and all-gather.
+[^6]: Lots of things can make containers and pods hard to checkpoint/restore. Important ones: (1) Threads that hold a cuda context but don't have anything resident on the device. `cuda-checkpoint` ends up choking on them. For SGLang these come from `torchinductor`'s compilation process. So we set `TORCHINDUCTOR_COMPILE_THREADS=1`, so no spare threads get created. (2) In k8s, lots of stuff in the pod will bind to the pods IP instead of localhost. When the checkpoint is restored, the pod will have a different IP, and everything dies. The solution is to get everything in SGLang that listens on TCP to bind either `0.0.0.0` (i.e. all interfaces) or localhost. For single GPU pods, `GLOO_SOCKET_IFNAME=lo` suffices. MultiGPU pods are a whole other kettle of fish that we can go into later. (3) `io_uring`: SGLang uses `io_uring` via `uvloop`. `io_uring` can't be checkpointed yet. There's an environment variable to force `uvloop` onto epoll, but it's (if nothing else needs it) easier to just disable it on the host `sudo sysctl -w kernel.io_uring_disabled=2`. (4) `HF_HUB_OFFLINE=1`: Prevents outbound TCP connections to Hugging Face Hub. With `tcp-established` in `runc.conf`, any active TCP connection at checkpoint time gets preserved. Outbound connections to external hosts would fail on restore in a new pod network context, so models should be downloaded on the host first.
