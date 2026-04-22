@@ -1,0 +1,266 @@
+---
+title: 'Also-rANS: Asymmetric Numeral Systems for entropy coding'
+description: |
+  An intro to rANS: an entropy coding method for losslessly encoding & decoding streams of bytes quickly.
+pubDate: '21 Apr 2026'
+index: true
+---
+
+{/*
+STATUS: Draft in progress
+
+OUTLINE:
+- [x] Section 1: What Huffman can't do
+- [x] Section 2: Encoding a sequence into an integer
+- [x] Section 3: Decoding reverses it
+- [ ] Section 4: Why does this work? The slot picture (skipped for now)
+- [x] Section 5: Renormalization
+- [x] Section 6: Putting it together
+
+INTERACTIVE DIAGRAMS:
+- [ ] Encode/decode stepper (sections 2+3)
+- [ ] Slot picture number line (section 4)
+- [ ] Renormalization demo (section 5, optional)
+
+NOTES:
+- Running example: 3-symbol alphabet A=4/8, B=3/8, C=1/8
+- Audience: technical readers who know Shannon + Huffman
+*/}
+
+
+rANS is one of a family of entropy coding methods that we can use to compress
+a stream of symbols losslessly. For some set of symbols $s \in S$, w/
+accompanying probabilities $p_s$, Shannon's source coding theorem tells us that
+symbol with probability $p_s$ carries exactly $\log_2(1/p_s)$ bits of
+information. A symbol that shows up half the time costs 1 bit. One that shows
+up a quarter of the time costs 2 bits. One that shows up 3/8 of the time costs
+$\log_2(8/3) \approx 1.415$ bits.
+
+[Huffman coding](https://en.wikipedia.org/wiki/Huffman_coding) can help us
+cleanly with the first two. But it uses fixed width symbols. The third symbol
+is going to end up taking $2$ bits to decode. The result is that we can't get
+perfect lossless compression.
+
+rANS is one of a set of [arithmetic
+coding](https://en.wikipedia.org/wiki/arithmetic_coding) methods that can
+achieve perfect compression, by not using fixed width symbols. Instead, the
+stream of bits is encoded into an integer, by a series of reversible arithmetic
+operations.
+
+## Encoding a sequence into an integer
+
+The code is a single integer, call it the *state* $x$. Each symbol we encode
+transforms $x$ through some arithmetic operation. The operation has to be
+reversible, because the decoder needs to recover both the symbol and the
+previous state from the new one.
+
+The specific operation rANS uses is:
+
+$$
+x' = \left\lfloor \frac{x}{f_s} \right\rfloor \cdot M + c_s + (x \bmod f_s)
+$$
+
+where $f_s$ is the frequency of symbol $s$ in our probability table, $c_s$ is
+its cumulative frequency (the sum of frequencies of all symbols that come
+before it in our enumeration), and $M$ is the total frequency
+$\sum_s f_s$. For our alphabet, that's:
+
+```txt
+Symbol   f_s   c_s
+A        4     0
+B        3     4
+C        1     7
+```
+
+So $M = 8$.
+
+Let me walk through encoding the sequence $A, B, C$ starting from some seed
+state $x = 13$. Pick 13 arbitrarily for now; we'll talk about why the seed
+value matters later.
+
+**Encode $A$** ($f = 4$, $c = 0$):
+
+$$
+x' = \left\lfloor \frac{13}{4} \right\rfloor \cdot 8 + 0 + (13 \bmod 4) = 3 \cdot 8 + 0 + 1 = 25
+$$
+
+**Encode $B$** ($f = 3$, $c = 4$):
+
+$$
+x' = \left\lfloor \frac{25}{3} \right\rfloor \cdot 8 + 4 + (25 \bmod 3) = 8 \cdot 8 + 4 + 1 = 69
+$$
+
+**Encode $C$** ($f = 1$, $c = 7$):
+
+$$
+x' = \left\lfloor \frac{69}{1} \right\rfloor \cdot 8 + 7 + (69 \bmod 1) = 69 \cdot 8 + 7 + 0 = 559
+$$
+
+The state walked $13 \to 25 \to 69 \to 559$. After encoding three symbols,
+our whole "code" is the single integer $559$. The entire message is packed
+into that number.
+
+{/* TODO: Interactive diagram — encode stepper.
+    Show state growth on a plot of log2(state) vs. symbols encoded, with the
+    Shannon bound drawn as a reference line. User picks symbols to encode. */}
+
+Now the payoff. Let's check how much the state grew in bits. It started at
+$\log_2(13) \approx 3.70$ bits. It ended at $\log_2(559) \approx 9.13$ bits.
+We added $5.43$ bits total. Shannon says our three symbols carry
+$1 + 1.415 + 3 = 5.415$ bits of information. The state grew by almost
+exactly that much[>1].
+
+[>1]: The per-step growth wasn't exactly 1, 1.415, 3 bits either. Encoding
+$A$ grew the state by $\log_2(25/13) \approx 0.94$ bits, less than Shannon's
+$1$ bit for $A$. Encoding $B$ grew it by $\log_2(69/25) \approx 1.47$ bits, a
+hair over Shannon's $1.415$. These individual wobbles are a quirk of
+encoding integer states. Each step rounds slightly up or down depending on
+where $x$ lands relative to $f_s$. The rANS guarantee is asymptotic, so
+over many symbols the wobbles average out and the per-symbol cost
+converges to the Shannon limit.
+
+Importantly, we didn't round anything to the nearest bit. Encoding $B$ grew
+the state by $1.47$ bits. Fractional bits!
+
+Where did they come from? The formula again:
+
+$$
+x' = \left\lfloor \frac{x}{f_s} \right\rfloor \cdot M + c_s + (x \bmod f_s)
+$$
+
+To first order, $x' \approx x \cdot \frac{M}{f_s} = x / P(s)$. So
+$\log_2 x'$ grows by approximately $\log_2(1/P(s))$, which is the Shannon
+information content of $s$. 
+
+One way to think of rANS encoding is as a change of base that smuggles in the
+symbol along the way. In base $f_s$, the number $x$ has last digit $x \bmod
+f_s$ and "rest" $\lfloor x / f_s \rfloor$. In base $M$, the encoded $x'$ has
+the same rest, but the last digit is promoted from a digit in $[0, f_s)$ to a
+digit in $[0, M)$, specifically $c_s + (x \bmod f_s)$. That promotion is where
+the symbol is injected: the promoted digit lands inside symbol $s$'s range
+$[c_s, c_s + f_s)$. The decoder, which we'll build next, reads $x' \bmod M$,
+sees which range the value falls in, and recovers both the symbol and the
+remainder.
+
+## Decoding reverses it
+
+To decode, we invert the encoding. Given a state $x'$, recover the
+last-encoded symbol and the previous state in three steps:
+
+1. Read the low digit $x' \bmod M$.
+2. Find the symbol $s$ whose range contains it, i.e.
+   $c_s \leq x' \bmod M < c_s + f_s$.
+3. Reconstruct the previous state:
+
+$$
+x = \left\lfloor \frac{x'}{M} \right\rfloor \cdot f_s + (x' \bmod M - c_s)
+$$
+
+Walking back from our encoded state $x' = 559$:
+
+**Decode from $x = 559$**:
+- $559 \bmod 8 = 7$, which lies in $C$'s range $[7, 8)$. Symbol is $C$.
+- Previous state: $\left\lfloor 559/8 \right\rfloor \cdot 1 + (7 - 7) = 69 \cdot 1 + 0 = 69$.
+
+**Decode from $x = 69$**:
+- $69 \bmod 8 = 5$, which lies in $B$'s range $[4, 7)$. Symbol is $B$.
+- Previous state: $\left\lfloor 69/8 \right\rfloor \cdot 3 + (5 - 4) = 8 \cdot 3 + 1 = 25$.
+
+**Decode from $x = 25$**:
+- $25 \bmod 8 = 1$, which lies in $A$'s range $[0, 4)$. Symbol is $A$.
+- Previous state: $\left\lfloor 25/8 \right\rfloor \cdot 4 + (1 - 0) = 3 \cdot 4 + 1 = 13$.
+
+The state walked $559 \to 69 \to 25 \to 13$, the mirror image of the
+encoding walk, and we're back at the seed. The decoded symbols appeared
+in the order $C, B, A$.
+
+{/* TODO: Interactive diagram — decode stepper.
+    Reuse the encode stepper component in reverse. */}
+
+Note the order. We encoded $A, B, C$ but decoded $C, B, A$. rANS is
+last-in-first-out. The encoder behaves like a stack, and the decoder
+pops from it. In practice this means real rANS encoders process their
+input message in reverse order, so that the decoder, running forward
+through the compressed state, produces symbols in the correct forward
+order.
+
+## Renormalization
+
+Until now, our compressed "code" has been a single integer $x'$. That's
+mathematically tidy but not directly implementable. For a long input, $\log_2
+x'$ grows linearly with the message length, so $x'$ itself grows exponentially,
+and no fixed-width integer can hold it.
+
+The fix is *renormalization*. The idea is we keep the state in a fixed range
+$[L, bL)$ for some chosen $L$ and base $b$. Common choices are $b = 2$ for a
+bit-level compressed stream or $b = 256$ for a byte-level one. Before encoding
+any symbol, check whether encoding would push the state above $bL$. If so,
+shift the low base-$b$ digits of $x$ out to an output stream, one at a time,
+until $x$ is small enough that encoding will leave the state inside $[L, bL)$.
+
+This emitted stream is the actual output of the encoding algorithm. Instead of
+one giant integer, we get a stream of bits or bytes spilled during encoding,
+plus a small residual state (always in $[L, bL)$) left over at the end. The
+compressed output is the concatenation of the two.
+
+Decoding reverses the process. Starting from the residual state, decode a
+symbol via the formula from the previous section, which shrinks the state
+by a factor of about $1/P(s)$. If the state has dropped below $L$, refill
+it by pulling digits from the stream back into the state as low digits,
+until the state is in $[L, bL)$ again. We then just repeat until the stream is
+empty and the state matches the seed.
+
+## Putting it together
+
+Here is complete rANS encode and decode, in pseudocode. Pick a state range
+$[L, bL)$, share the frequency table $\{(f_s, c_s)\}$ and the total $M$
+between encoder and decoder, and that's the whole scheme.
+
+```python
+def encode(message, freq, M, L, b):
+    x = L                                    # seed state
+    stream = []
+    for s in reversed(message):              # process LIFO
+        f, c = freq[s]
+        while M * x >= b * L * f:            # renormalize: spill low digit
+            stream.append(x % b)
+            x //= b
+        x = (x // f) * M + c + (x % f)       # apply encode formula
+    return x, stream                         # residual state + digits
+
+def decode(x, stream, freq, M, L, b, n):
+    slot_to_symbol = build_slot_table(freq)  # e.g. [A,A,A,A,B,B,B,C]
+    message = []
+    for _ in range(n):
+        slot = x % M
+        s = slot_to_symbol[slot]
+        message.append(s)
+        f, c = freq[s]
+        x = (x // M) * f + slot - c          # apply decode formula
+        while x < L and stream:              # renormalize: refill low digit
+            x = x * b + stream.pop()
+    return message
+```
+
+`slot_to_symbol` is a lookup table of size $M$ holding which symbol owns
+each of the $M$ slot positions. For our running alphabet with $M = 8$, it
+is the list $[A, A, A, A, B, B, B, C]$ [>2].
+
+[>2]: This is an $O(1)$ way of solving the problem of finding the correct
+range. You could also search for it.
+
+The decode step is cheap. Per symbol it is one mod, one table lookup, one
+integer division, one multiply, one add, one subtract, and possibly a few
+digit-reads from the stream. No variable-length prefix code, no bit-by-bit
+decoding. Each symbol takes near-constant work, which is why rANS and its
+variants are popular in performance-sensitive compressors.
+
+Encoding and decoding are mirror images. Encoding processes the message in
+reverse and pushes digits onto the stream. Decoding processes the stream in
+reverse (via `pop`) and produces the message in forward order. The whole
+scheme is LIFO throughout: in symbols, and in stream digits.
+
+That is rANS. A single integer carries fractional bits of information per
+symbol, arithmetic operations encode and decode reversibly, and
+renormalization keeps the whole thing to a bounded state plus a digit
+stream.
