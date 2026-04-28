@@ -1,0 +1,75 @@
+---
+title: 'Routing requests you haven''t seen yet'
+description: |
+  What changes when the router gets to look at the whole queue before
+  committing to anything.
+pubDate: 'Apr 28 2026'
+---
+
+import Sidenote from '../../components/Sidenote.astro'
+
+{/*
+STATUS: Draft in progress
+
+OUTLINE:
+- [x] Intro hook
+- [x] Prefix sharing
+- [ ] Model placement (future)
+- [ ] Deadlines / SLA (future)
+
+NOTES:
+- Audience: same crowd as scheduling-in-inference-engines (knows KV cache,
+  comfortable with roofline reasoning).
+*/}
+
+Routing for LLM inference is almost always online. A request arrives, the
+router picks a worker, the request goes there. The decision has to happen now,
+because somebody is waiting on the other end of an HTTP connection. So the
+router does the best it can with what it has in front of it: maybe it hashes
+the prompt prefix and tries to land on a worker that already has the KV
+cache, maybe it picks the least-loaded box, maybe it does both. Then the
+request is gone and the next one shows up.
+
+But a lot of the work people actually want to do with LLMs isn't like that.
+Evals, data labelling, document extraction, synthetic data, embeddings over a
+corpus you already have on disk. None of it cares whether the answer comes
+back in 200ms or four hours. This is the workload Doubleword is built for:
+you hand us a pile of requests, you tell us roughly how long you're willing
+to wait, and we run them. In exchange you get a serious discount, partly
+because we get something genuinely valuable in return: we get to _see all
+the requests at once_ before we have to commit to running any of them.
+
+That last part is the bit I want to talk about. Once the router isn't a
+dispatcher reacting to whatever showed up next, but a planner looking at the
+whole queue, the problem changes shape. The familiar online tricks stop
+being the right answers, because they were answers to a harder question
+than the one we're now being asked. So what _are_ the right answers?
+
+## Prefix sharing
+
+A lot of offline workloads share a long prompt prefix across many requests:
+a system prompt with a thousand user queries, one document with a hundred
+questions about it, a fixed instruction with a stack of inputs to extract
+from. Inference engines already handle this with a prefix cache[>1] - the
+shared portion's KV gets computed once and reused.
+
+[>1]: vLLM and SGLang both have one. The cache is LRU-ish over KV blocks; when a new request's prompt starts with tokens already cached, prefill skips them.
+
+Pre-routing gets you two things on top. First, the cache stops churning.
+Online, an LRU cache under load evicts prefixes you were about to reuse,
+because the engine has no idea what is in the queue behind the request it is
+currently serving. Knowing the queue lets you keep a prefix resident for
+exactly as long as someone still needs it. Cache hit rate on shared prefixes
+goes to one. No new trick, just scheduling.
+
+Second, even with a perfect cache hit, every request in a same-prefix decode
+batch still loads the shared KV from HBM independently. Decode is
+bandwidth-bound, so this redundant traffic dominates iteration time. Cascade
+attention[>2] collapses it: the shared K and V get loaded once per batch
+and the attention runs as a batched matmul. The catch is that you need a
+batch of decode steps that share a prefix to begin with, which an online
+router cannot reliably construct, because it dispatches requests
+individually and inherits whatever batch composition falls out. Pre-routing
+composes the batch on purpose.
+
+[>2]: Same algorithm as [Hydragen](https://arxiv.org/abs/2402.05099); FlashInfer ships it as a kernel.
