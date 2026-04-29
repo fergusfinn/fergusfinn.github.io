@@ -1,0 +1,243 @@
+---
+title: 'How Compressible Are Model Weights?'
+description: |
+  An empirical investigation into the byte-level entropy of model weights
+  across numeric formats and model families.
+pubDate: 'Apr 27 2026'
+index: false
+---
+
+{/*
+STATUS: Draft - intro + magnitude distributions
+
+OUTLINE:
+- [x] Introduction - the question
+- [x] Magnitude distributions - the universal shape
+- [ ] Setup - what we measured, how
+- [ ] BF16 baseline - the exponent/mantissa split
+- [ ] FP8 E4M3 - does halving the format help?
+- [ ] Block-quantized formats - where does the entropy go?
+  - [ ] Qwen block FP8 (BF16 scales)
+  - [ ] DeepSeek MXFP8/MXINT8 (E8M0 scales)
+  - [ ] OpenAI MXFP4 (E8M0 scales)
+  - [ ] NVIDIA NVFP4 (double quantization)
+  - [ ] Moonshot INT4 (packed integers)
+- [ ] The self-similarity question - do scales look like weights?
+- [ ] Cross-lab, cross-scale comparison
+- [ ] What this means for compression / transfer / storage
+
+NOTES:
+- Data gathered from models cached on chiaotzu (2x8 B200)
+- Have BF16 <-> FP8 direct pair for Qwen3.5-35B-A3B
+- Need more data: layer variation, more models
+- Central observation: exponent entropy is ~2.6/8 bits in BF16, mantissa is ~7/7
+- Block quant pushes exponent info into scales, where it's even more compressible
+- User's key insight: the distribution might be self-similar across scales
+- DeepSeek V4 E8M0 scale result (only 2 values) might be a packing artifact - investigate later
+*/}
+
+import EntropyBars from '../../components/EntropyBars.tsx'
+import MagnitudeHistogram from '../../components/MagnitudeHistogram.tsx'
+import GumbelCollapse from '../../components/GumbelCollapse.tsx'
+
+## Introduction
+
+If you store a model's weights in bfloat16, each parameter gets 16 bits.
+That's the budget. The question is whether we're spending it well.
+
+Information theory gives us a clean way to ask this. Shannon entropy measures
+the average information content per symbol in a stream of data. If every
+possible byte value appears equally often, entropy is maximal and there's
+nothing to squeeze out. If certain values dominate, entropy drops below the
+bit-width, and the difference is waste: bits allocated but carrying no
+information.
+
+So that's the question, and it's the kind of thing we can just measure.
+
+## Setup
+
+We pulled weight files from as many open-weight models as we could get our
+hands on [>1] — different labs (Qwen, DeepSeek, Google, OpenAI, Moonshot,
+MiniMax, NVIDIA, StepFun, Zhipu), different scales (0.6B up to 1.4T
+parameters), different storage formats (BF16, FP8, MXFP8, MXFP4, NVFP4,
+INT4) — and computed the Shannon entropy of each.
+
+[>1]: Coincidentally, we serve almost all of these models at [doubleword](https://app.doubleword.ai) - sign up today for 10$ in free tokens.
+
+[Shannon's source coding theorem](https://en.wikipedia.org/wiki/Shannon%27s_source_coding_theorem)
+tells us that the minimum average number of bits needed to represent a single
+symbol from an i.i.d. [>3] source is exactly its Shannon entropy. The gap
+between the entropy of a model's weights and the bits a format actually
+allocates is the slack we're looking for.
+
+[>3]: Independently and identically distributed. Interestingly, for all intents
+and purposes, LLM weights seem statistically to be i.i.d. I found this a little
+bit surprising: you might imagine clusters of weights with similar roles
+forming functional units within large matrices, and I assumed that the coupling
+required during training to allow them to play these roles would couple their
+distributions to one another. I mean we explicitly try to design these into the
+architectures of MoE models! It seems like, to the extent that these functional
+groups exist, they manage to become tailored to their role without these roles
+manifesting in their distributions.
+
+## The BF16 baseline
+
+BF16 first. BF16 weights carry about 10.6 bits of
+entropy per element, out of the 16 the format allocates. A third of the
+budget is slack.
+
+Why?
+
+<EntropyBars client:load defaultFormats={["BF16"]} />
+
+Across every BF16 model we measured, the slack is concentrated in one
+place. The exponent carries about 2.6 bits of entropy, out of 8
+allocated. The mantissa carries roughly 7 of its 7. The sign behaves like
+a fair coin — 1 bit out of 1. Of the 16 bits we spend on a BF16 weight,
+the only wasteful one is the exponent.
+
+And the gap is remarkably stable. Two orders of magnitude in parameter
+count, four labs, different training recipes, and the exponent entropy
+lands in a band roughly 0.05 bits wide.
+
+
+## Why the exponent?
+
+The mantissa uses its full budget; the sign behaves like a fair coin. Only
+the exponent has slack. So the question is what, about the way these
+weights are distributed, makes the exponent specifically the wasteful
+field.
+
+A floating-point number's exponent is determined by its magnitude — roughly,
+log₂|w|. So the entropy of the exponent across a tensor is a direct
+function of how spread out the weight magnitudes are. If weights were
+distributed evenly across all the magnitudes BF16 can represent, the
+exponent would be near-maximally informative and we'd be using all 8 bits.
+If they're all clustered in a narrow magnitude band, most of the 256
+possible exponent values never appear, and the entropy collapses.
+
+It turns out they're clustered. Every trained model we measured has its
+weight magnitudes peaked sharply somewhere between $2^{-9}$ and $2^{-6}$ —
+a [lognormal](https://en.wikipedia.org/wiki/Log-normal_distribution)-ish,
+left-skewed, unimodal shape.
+
+<MagnitudeHistogram client:load defaultFormats={["BF16","FP8","MXFP8"]} />
+
+And it's not just that each model is narrow — they're all the *same*
+narrow. Shift each distribution by its mean, rescale by its variance, and
+(almost) every model collapses onto the same curve.
+
+[>_1]
+
+[>_1]: Excluded: Qwen3.5-122B, Qwen3.5-397B, Qwen3-VL-235B — they have a curious phenomenon where some weights in their MoE layers are 'dead'; with those weights excluded, they look the same as the others.
+
+<GumbelCollapse client:load defaultFormats={["BF16","FP8","MXFP8"]} />
+
+So the slack in BF16 isn't a property of any specific model or training
+recipe. It's a property of the format combined with a universal fact about
+how trained weights are distributed: BF16's exponent is sized for a wider
+range of magnitudes than any model actually uses.
+
+We're obviously not the first to notice that less precise number formats
+are useful for LLMs — NVIDIA's headline FLOPS numbers have been doubling
+on the back of halving bitwidths for a couple of years now. Do these
+narrower formats cut out all the slack?
+
+## FP8
+
+The simplest narrower format is FP8. Same three-part structure as BF16,
+allocations halved: 1/4/3 instead of 1/8/7.
+
+[>_2]
+
+![bf16 bit layout: 1 sign, 8 exponent, 7 significand](/blog-images/bf16-layout.svg)
+
+[>_2]: Format of the diagram stolen from this amazing [article](https://ciechanow.ski/exposing-floating-point/) & adjusted for bf16.
+
+![fp8 e4m3 bit layout: 1 sign, 4 exponent, 3 significand](/blog-images/fp8-e4m3-layout.svg)
+
+The recipes that got these models to FP8 are all different — native FP8
+pre-training, MXFP8 from QAT during post-training, BF16 plus a fine-grained
+quantization pass, others — but the magnitude distribution at the byte
+level is the same across all of them.[^q-origin]
+
+<EntropyBars client:load defaultFormats={["BF16","FP8","MXFP8"]} />
+
+FP8 weights carry about 6.5 bits of entropy out of 8, vs BF16's 10.6 of 16
+— roughly 80% of the budget used, vs 66%. So shrinking the format does
+close some slack, in absolute terms.
+
+[^q-origin]: How each low-precision model in the chart got to its precision.
+    - DeepSeek-V3.1 (FP8): pre-trained at FP8 using the UE8M0 scale data format on weights and activations. [Model card](https://huggingface.co/deepseek-ai/DeepSeek-V3.1).
+    - MiniMax-M2.7 (FP8): trained at FP8. [HF discussion](https://huggingface.co/MiniMaxAI/MiniMax-M2/discussions/14).
+    - DeepSeek-V4 attention (MXFP8) and experts (MXFP4): pre-trained at FP8, with MXFP4 quantization-aware training applied to MoE expert weights during post-training. [V4 technical report §3.4](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/resolve/main/DeepSeek_V4.pdf).
+    - GLM-5.1 (FP8): INT4 QAT in SFT and FP8 used in RL rollouts. [GLM-5 technical report](https://arxiv.org/html/2602.15763v1).
+    - Step-3.5-Flash (FP8): shipped as a full FP8 model; paper is light on training-precision detail. [Step-3 paper](https://arxiv.org/abs/2507.19427).
+    - Qwen FP8 family — Qwen3-14B, Qwen3.5-35B-A3B, Qwen3.5-122B-A10B, Qwen3.5-397B-A17B, Qwen3.6-27B, Qwen3.6-35B-A3B, Qwen3-VL-30B-A3B, Qwen3-VL-235B-A22B: BF16 models with fine-grained FP8 quantization (block size 128) applied at release. [Example](https://huggingface.co/Qwen/Qwen3-14B-FP8).
+    - gpt-oss-20b / 120b (MXFP4): native MXFP4 post-training. [gpt-oss-120b](https://huggingface.co/openai/gpt-oss-120b).
+    - Kimi-K2.6 experts (INT4): INT4 quantization-aware training. [Kimi-K2-Thinking](https://huggingface.co/moonshotai/Kimi-K2-Thinking).
+    - Nemotron-3-Super-120B (NVFP4): pre-trained at NVFP4. [Nemotron-3 Super technical report](https://research.nvidia.com/labs/nemotron/files/NVIDIA-Nemotron-3-Super-Technical-Report.pdf).
+    - Nemotron-3-Nano-30B (NVFP4): post-training quantization from BF16 with quantization-aware distillation. [Nemotron QAD page](https://research.nvidia.com/labs/nemotron/nemotron-qad/).
+
+## Below the floor
+
+Up to FP8, the magnitude distribution didn't have to move. Every byte-level
+format we've looked at — BF16, FP8, MXFP8, Qwen's block-FP8 — gives the
+per-element exponent at least 4 bits, comfortably more than the ~2.6 bits
+of entropy the distribution wants. The slack is real but the format absorbs
+it; the distribution sits inside whatever budget is available.
+
+FP4 is where this breaks. The per-element exponent has 2 bits — 4 codes
+for a distribution that wants something closer to 6. The per-element
+field can't carry the magnitude distribution on its own.
+
+The architectural workaround is the block scale. MXFP8 and MXFP4 use
+32-element blocks with an E8M0 scale (just an 8-bit power-of-two exponent).
+NVFP4 uses 16-element blocks with an E4M3 FP8 scale, plus a single FP32
+per-tensor scale on top (so-called double-quantization). Qwen's block-FP8
+uses 128-element blocks with BF16 scales. Moonshot's INT4 packs four-bit
+integers with a higher-precision scale per group. The scale absorbs the
+absolute magnitude per block; the per-element bits only have to cover
+variation *within* the block.
+
+Which raises the question: can the model arrange itself so within-block
+ranges fit in 2 bits? If yes, the distribution has to adapt. If no,
+information is lost.
+
+<MagnitudeHistogram client:load defaultFormats={["MXFP4","NVFP4","INT4"]} />
+
+It adapts. The magnitude histogram for sub-byte models doesn't sit on the
+same lognormal curve that BF16 and FP8 do — it's narrower, often with a
+different peak. The distribution that gets you low loss at MXFP4 isn't the
+distribution that gets you low loss at BF16.
+
+So below 8 bits, for the first time, the format is shaping the distribution
+rather than the other way around. Up to FP8 the universality from §4 was a
+property of the model: train under loose enough constraints and the weights
+settle into the same lognormal shape. Below FP8, the constraint tightens
+past the 2.6-bit floor, and the model has to give.
+
+And we can see where the entropy went.
+
+<EntropyBars client:load defaultFormats={["MXFP4","NVFP4","INT4"]} />
+
+At MXFP4 the per-element exponent is fully used (~1.9 / 2) and the mantissa
+is fully used (~1 / 1) — the slack has left the per-element bits. It hasn't
+disappeared though: it's migrated into the per-block scales, which carry
+about 0.03 bits of entropy per element out of 0.25 allocated for MXFP4.
+NVFP4's larger scale field (FP8 rather than E8M0) closes more of that scale
+slack — ~0.28 of 0.5.
+
+Net per-element-plus-scale entropy: ~93% used at MXFP4, vs 80% at FP8 and
+66% at BF16. Close to the floor, with most of the remaining slack now
+living in the scales.
+
+## Headroom
+
+The remaining gap in each format is the headroom for entropy coding on
+top: roughly a third of BF16's bits, ~17% of FP8's, ~7% of FP4's.
+
+Whether it's worth recovering depends on where the bottleneck sits and
+whether you can decode fast enough. We'll explore making use of that
+headroom in followups. But it's real, consistent across the field, and
+lossless — it's just bandwidth waiting to be traded for compute.

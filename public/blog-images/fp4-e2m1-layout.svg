@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="92" viewBox="0 30 320 92">
+  <!-- fp4 e2m1 (NVFP4 element): 1 sign, 2 exponent, 1 mantissa -->
+
+  <rect x="32" y="38" width="34" height="44" rx="6" fill="#eccccc"/>
+  <rect x="72" y="38" width="100" height="44" rx="6" fill="#cfe6cf"/>
+  <rect x="178" y="38" width="100" height="44" rx="6" fill="#ccd4ea"/>
+
+  <g font-family="'Menlo','Courier New',monospace" font-weight="700" font-size="30" fill="#3a3a3a" text-anchor="middle">
+    <text x="49" y="71">0</text>
+    <text x="122" y="71">10</text>
+    <text x="228" y="71">1</text>
+  </g>
+
+  <g font-family="'Menlo','Courier New',monospace" font-size="17">
+    <text x="49" y="106" fill="#cf6b6b" text-anchor="middle">sign</text>
+    <text x="122" y="106" fill="#6fa86f" text-anchor="middle">exponent</text>
+    <text x="228" y="106" fill="#6c7ec9" text-anchor="middle">significand</text>
+  </g>
+</svg>

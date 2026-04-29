@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="490" height="92" viewBox="0 30 490 92">
+  <!-- 16 bits total, same as original. Each char ~22px wide -->
+  <!-- Sign: 1 bit, Exponent: 8 bits, Significand: 7 bits -->
+
+  <!-- Sign box -->
+  <rect x="32" y="38" width="34" height="44" rx="6" fill="#eccccc"/>
+  <!-- Exponent box -->
+  <rect x="72" y="38" width="184" height="44" rx="6" fill="#cfe6cf"/>
+  <!-- Significand box -->
+  <rect x="262" y="38" width="166" height="44" rx="6" fill="#ccd4ea"/>
+
+  <g font-family="'Menlo','Courier New',monospace" font-weight="700" font-size="30" fill="#3a3a3a" text-anchor="middle">
+    <text x="49" y="71">0</text>
+    <text x="164" y="71">10000110</text>
+    <text x="345" y="71">1010001</text>
+  </g>
+
+  <g font-family="'Menlo','Courier New',monospace" font-size="17">
+    <text x="49" y="106" fill="#cf6b6b" text-anchor="middle">sign</text>
+    <text x="164" y="106" fill="#6fa86f" text-anchor="middle">exponent</text>
+    <text x="345" y="106" fill="#6c7ec9" text-anchor="middle">significand</text>
+  </g>
+</svg>
