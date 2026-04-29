@@ -1,0 +1,281 @@
+---
+title: '140 Years of Congress, in SQL'
+description: |
+  Reading 17 million Congressional speeches with an LLM-aware SQL shell
+pubDate: 'Apr 29 2026'
+index: true
+---
+
+import TopicChart from '../../components/TopicChart.tsx'
+import CountrySparklines from '../../components/CountrySparklines.tsx'
+import TimePredictionChart from '../../components/TimePredictionChart.tsx'
+
+A few cloud warehouses now let you call an LLM from a `SELECT` statement. Snowflake calls it [Cortex](https://docs.snowflake.com/en/user-guide/snowflake-cortex/aisql), BigQuery calls it [AI Functions](https://cloud.google.com/blog/products/data-analytics/sql-reimagined-for-the-ai-era-with-bigquery-ai-functions). The proposition is simple: SQL is already the language for transforming tabular data at scale, LLMs are general-purpose text functions, so let the warehouse run the model calls alongside the query[>1].
+
+[>1]: It's a natural fit. Need to classify a million rows of free text? Summarize a column of customer feedback? Extract entities from unstructured data? Write a SQL query, and the warehouse handles the model calls. The thing that makes it economically viable at scale is batched inference: instead of paying realtime API prices per row, you submit prompts in bulk and trade latency for throughput.
+
+The same idea works outside a warehouse. [qlm](https://github.com/doublewordai/qlm) is a small SQL shell built on [DataFusion](https://datafusion.apache.org/) that adds three LLM functions to standard SQL — `llm()`, `llm_unfold()`, `llm_fold()` — and routes the calls through Doubleword's [Batched](https://docs.doubleword.ai/batches) inference service[>2]. No warehouse, no server, no database extension. Point it at a local parquet file, write a query, get results. The [README](https://github.com/doublewordai/qlm) has the full API. This post is about what the primitives let you do.
+
+[>2]: Batch inference is what makes this practical for ad-hoc local analysis. Calling an LLM per row across tens of thousands of rows becomes a normal thing to do, not a budget event.
+
+The dataset is the [U.S. Congressional Speeches corpus](https://huggingface.co/datasets/Eugleo/us-congressional-speeches): 17 million speeches from 1873 to 2010, split across 28 parquet shards. Pointing qlm at a directory loads all the shards as a single table:
+
+```bash
+mkdir -p speeches && cd speeches
+for i in $(seq 0 27); do
+  wget -q "https://huggingface.co/datasets/Eugleo/us-congressional-speeches\
+/resolve/main/data/train-$(printf '%05d' $i)-of-00028.parquet"
+done
+cd ..
+qlm --api-key $DOUBLEWORD_API_KEY -t speeches=speeches/
+```
+
+## What was Congress arguing about?
+
+The simplest primitive is `llm()`. It takes a prompt template and one or more columns, substitutes the column values into the template, and calls the model once per row — a `MAP` operation where the function is "ask the model". The `{0}`, `{1}` placeholders refer to column arguments by position.
+
+To get a feel for the dataset, sample three speeches per decade and ask the model what each one is about:
+
+```sql
+SELECT decade, topic FROM (
+  SELECT decade,
+    llm('What specific topic is debated in this speech? '
+        'Answer in under 15 words. Be concrete — name '
+        'people, bills, places, or dollar amounts:\n\n{0}',
+    text) as topic,
+    ROW_NUMBER() OVER (
+      PARTITION BY decade ORDER BY RANDOM()) as rn
+  FROM (
+    SELECT text, CONCAT(LEFT(date, 3), '0s') as decade
+    FROM speeches
+    WHERE char_count > 1000 AND char_count < 4000
+  )
+)
+WHERE rn <= 3 ORDER BY decade, rn;
+```
+
+```
++--------+--------------------------------------------------------------+
+| decade | topic                                                        |
++--------+--------------------------------------------------------------+
+| 1870s  | Buffalo harbor sandbar obstruction; $73M grain commerce at   |
+|        |   risk; emergency appropriation needed                        |
+| 1870s  | Indian agency funding limits and emergency supply purchases  |
+|        |   under $300                                                  |
+| 1870s  | $25,000 vs. $50,000 appropriation for lighthouse work,       |
+|        |   urged by Chicago Board of Trade                             |
+| 1880s  | Mississippi statute banning ballot marks; Chalmers vs.       |
+|        |   Lynch ticket dispute                                        |
+| 1880s  | Ironclad ships purchase; $5M+ cost; naval advisory board's   |
+|        |   expertise questioned                                        |
+| 1880s  | Sugar tariff reduction; Havemeyers, Spreckels, 2-cent        |
+|        |   tariff proposal                                             |
+| 1890s  | District of Columbia appropriations bill, unclear spending    |
+| 1890s  | Senator from Connecticut's manners and forgotten              |
+|        |   conversations with speaker                                  |
+| 1890s  | Sugar machinery manufacturing, German vs. American pumps,    |
+|        |   Kansas/Louisiana experimental factories                     |
+| 1900s  | Pay Department rank structure and personnel limits in U.S.   |
+|        |   Army bill                                                   |
+| 1900s  | Civil Service Commission funding and salary increase for a   |
+|        |   key employee                                                |
+| 1900s  | No specific topic debated — farewell speech by retiring      |
+|        |   member                                                      |
+| 1910s  | National Guard family support: $50/month aid for dependents  |
+|        |   if member deploys                                           |
+| 1910s  | Spokane case, $100,000 litigation, railroad burden of proof  |
+| 1910s  | Military training for 750,000 U.S. college/high school       |
+|        |   students via summer camps                                   |
+| 1920s  | Civil service retirement age reduction to 55, pension        |
+|        |   precedent, 30-year service debate                           |
+| 1920s  | Muscle Shoals lease to Ford; fertilizer trust; Senator       |
+|        |   Harrison; Mr. Ober's testimony                              |
+| 1920s  | Bonus bill amendment debate; Senators from Massachusetts,    |
+|        |   New York, Iowa, Arkansas                                    |
+| 1930s  | Wisconsin dairy surplus; FSCC to buy cheese/milk for relief  |
+| 1930s  | Agricultural exemptions in bill targeting industry           |
+|        |   regulation, including turpentine, meatpacking, canneries   |
+| 1930s  | Branch banking under Section 19, Federal Reserve Board       |
+|        |   authority, state laws                                       |
+| 1940s  | 1942 estate tax law unfairly taxing living property owners   |
+|        |   in Colorado                                                 |
+| 1940s  | Refunding $16,000 tax to Colorado Springs claimant despite   |
+|        |   expired statute of limitations                              |
+| 1940s  | National old-age pensions, House Resolution No. 21, Kansas   |
+| 1950s  | Bureau of Budget employees, Mr. Wenzell, dual employment,    |
+|        |   AEC meetings                                                |
+| 1950s  | Merchant shipping adequacy, domestic trades, post-WWII fleet |
+|        |   recovery                                                    |
+| 1950s  | Tennessee Press Association slogan translations across       |
+|        |   languages and regions                                       |
+| 1960s  | Soviet nuclear tests, U.S. resumption, Berlin rights,        |
+|        |   Khrushchev, 100 million tons TNT                            |
+| 1960s  | Civil rights legislation, minimum wage bill, cloture,        |
+|        |   Attorney General school desegregation suits                 |
+| 1960s  | Donhauser's award, student Debyl's prize, WSUO ceramic art   |
+| 1970s  | $500M/year insulation tax credit debated; critics call it    |
+|        |   Treasury raid, dollar devaluation                           |
+| 1970s  | Soviet refusal to grant exit visas to Andreyeva family in    |
+|        |   Vilnius seeking to reunite with relatives in Israel         |
+| 1970s  | Extension of Senate Select Committee on Indian Affairs, led  |
+|        |   by Senator Jim Abourezk                                     |
+| 1980s  | Defense spending increase via continuing resolution          |
+|        |   amendment, targeting readiness, spare parts, fuel           |
+| 1980s  | American farmers' economic impact and global food production |
+| 1980s  | Persecution of Chinese Catholics & U.S. ratification of      |
+|        |   Genocide Convention                                         |
+| 1990s  | Budget cuts, White House $15M, Indiana & San Diego reps      |
+| 1990s  | Secretary O'Leary's resignation over hiring firm to          |
+|        |   investigate reporters                                       |
+| 1990s  | Employer mandate in healthcare bill, job loss, Chafee plan   |
+|        |   vouchers                                                    |
+| 2000s  | NASA funding, Johnson Space Center, President's vision,      |
+|        |   Jet Propulsion Lab                                          |
+| 2000s  | Durbin-Hutchison amendment to FAA bill targeting American    |
+|        |   Airlines pension penalties                                  |
+| 2000s  | Bay Special Care Hospital's 10-year service in Bay City,     |
+|        |   Michigan                                                    |
+| 2010s  | YouCut bill to eliminate printing of congressional bills,    |
+|        |   saving $7M                                                  |
+| 2010s  | Abdulmutallab, Fort Hood, Zazi, Headley; flawed             |
+|        |   intelligence bill                                           |
+| 2010s  | UniCapitol Washington Internship Programme for Australian    |
+|        |   students in U.S. Congress                                   |
++--------+--------------------------------------------------------------+
+```
+
+The range is striking: Buffalo harbor's $73M grain commerce and Indian agency appropriations in the 1870s, Havemeyers and the sugar tariff in the 1880s, Muscle Shoals and Ford in the 1920s, Khrushchev's 100-megaton nuclear tests in the 1960s, Soviet exit visas and Senator Abourezk's Indian Affairs committee in the 1970s, Abdulmutallab and Fort Hood in the 2010s. Each decade is immediately recognizable from just three speeches.
+
+## A bird's-eye view
+
+That's 42 LLM calls. With batched inference cheap enough to make this routine, we can scale up: classify ~5,500 speeches (40 per year across every year from 1873 to 2010) into broad topic categories, and plot how Congressional attention has shifted over 140 years.
+
+```sql
+SELECT LEFT(date, 4) as year, topic, COUNT(*) as count
+FROM (
+  SELECT date,
+    llm('Classify this Congressional speech into exactly one topic: '
+        'economy, defense, civil-rights, healthcare, education, '
+        'immigration, environment, judiciary, infrastructure, '
+        'foreign-policy. One hyphenated word only:\n\n{0}',
+    text) as topic
+  FROM (
+    SELECT text, date,
+      ROW_NUMBER() OVER (
+        PARTITION BY LEFT(date, 4) ORDER BY RANDOM()) as rn
+    FROM speeches
+    WHERE char_count > 500 AND char_count < 5000
+  )
+  WHERE rn <= 40
+)
+GROUP BY year, topic ORDER BY year, count DESC;
+```
+
+<TopicChart client:load />
+
+The trends tell a clear story. Judiciary dominates the 19th century — Congress was building the legal infrastructure of a new nation. Economy spikes in the 1930s (the Depression) and again post-2008. Defense surges during WWII, foreign policy peaks during the Cold War. Civil rights rises through the 1960s and reaches its highest share in the 1990s. Healthcare barely registers before 1950 but climbs steadily to 13% by the 2000s. Environment appears as a topic only after 1970 — the year of the EPA and the Clean Air Act.
+
+## Who is Congress talking about?
+
+`llm_unfold()` is for one-to-many transformations: one input row, a variable number of output values. The model returns a delimited list, qlm splits it into an array, and `UNNEST()` expands it back into rows. To extract every foreign country mentioned in a speech and aggregate by year:
+
+```sql
+SELECT LEFT(date, 4) as year, TRIM(country) as country, COUNT(*) as mentions
+FROM (
+  SELECT date,
+    UNNEST(llm_unfold(
+      'List the foreign countries discussed in this speech. '
+      'Comma-separated, country names only. If none, reply "none":\n\n{0}',
+      text, ',')) as country
+  FROM (
+    SELECT text, date,
+      ROW_NUMBER() OVER (
+        PARTITION BY LEFT(date, 4) ORDER BY RANDOM()) as rn
+    FROM speeches
+    WHERE char_count > 500 AND char_count < 5000
+  )
+  WHERE rn <= 40
+)
+WHERE TRIM(country) != 'none' AND TRIM(country) != ''
+GROUP BY year, TRIM(country) ORDER BY year, mentions DESC;
+```
+
+Another ~5,500 LLM calls, but now each call returns a list rather than a single value.
+
+<CountrySparklines client:load />
+
+The entire arc of American foreign policy is legible. Britain dominates the 19th century and fades after WWII. Germany peaks in the 1920s (Weimar reparations) and again during Cold War partition. Russia and the USSR barely register before the 1940s, then surge to dominance through the 1980s before collapsing. Vietnam appears suddenly in the 1960s, then vanishes. Cuba spikes during the missile crisis. Japan rises in the 1990s with the trade wars, Mexico surges with NAFTA, and China overtakes everything in the 2000s.
+
+## What did each decade *feel* like?
+
+The topic chart and country sparklines are quantitative views. For a textual companion, `llm_fold()` is an aggregate function — it reduces many rows into one value, like `SUM` or `COUNT`, but using LLM calls. Given N rows, it pairs them up, reduces each pair, then pairs the results, recursively, until one value remains. That's O(log N) LLM calls instead of O(N), which matters once N gets into the thousands.
+
+The classic version of tree-reduce uses an optional map step to compress each row before the reduce, so the reduce prompt only ever sees small summaries. Modern context windows make that mostly unnecessary — at 50 speeches per decade and ~3K characters per speech, even a leaf-level 2-way reduce is only seeing ~6K characters. Skip the map step entirely; the reduce prompt just needs to be neutral about whether its inputs are raw speeches (at the leaves) or prior summaries (at higher levels).
+
+```sql
+SELECT decade,
+  llm_fold(
+    text,
+    'Combine the following Congressional material into a 3-sentence '
+    'overview of the decade. Focus on dominant political themes, '
+    'recurring conflicts, and what was at stake. Be concrete — name '
+    'people, bills, dollar amounts where they appear:\n\n'
+    'Material A:\n{0}\n\n---\n\nMaterial B:\n{1}'
+  ) as summary
+FROM (
+  SELECT text, CONCAT(LEFT(date, 3), '0s') as decade,
+    ROW_NUMBER() OVER (
+      PARTITION BY CONCAT(LEFT(date, 3), '0s') ORDER BY RANDOM()) as rn
+  FROM speeches
+  WHERE char_count > 500 AND char_count < 5000
+)
+WHERE rn <= 50
+GROUP BY decade ORDER BY decade;
+```
+
+{/* TODO: paste real fold output table here once query has been run */}
+
+```
++--------+--------------------------------------------------------------+
+| decade | summary                                                      |
++--------+--------------------------------------------------------------+
+| 1870s  | (decade summary)                                             |
+| 1880s  | (decade summary)                                             |
+| ...    | ...                                                          |
++--------+--------------------------------------------------------------+
+```
+
+50 speeches per decade, mapped down to one paragraph each through ~49 LLM calls per group, all batched. The result is a textual companion to the topic chart: where the chart shows shifting proportions of categories, the fold reads back the decade's actual concerns in the model's own words.
+
+## Can the model date a speech from its content?
+
+Here's a different kind of question. Can the model tell *when* a speech was given, purely from the text? No dates, no metadata, just the words.
+
+```sql
+SELECT LEFT(date, 4) as actual_year,
+  CONCAT(LEFT(date, 3), '0s') as actual_decade,
+  llm('What decade was this U.S. Congressional speech from? '
+      'Answer with just the decade (e.g. 1950s):\n\n{0}',
+  LEFT(text, 2000)) as guessed_decade
+FROM (
+  SELECT text, date,
+    ROW_NUMBER() OVER (
+      PARTITION BY LEFT(date, 4) ORDER BY RANDOM()) as rn
+  FROM speeches
+  WHERE char_count > 500 AND char_count < 5000
+)
+WHERE rn <= 40
+ORDER BY actual_year;
+```
+
+5,520 speeches, each shown to the model with no context beyond the text itself. The confusion matrix:
+
+<TimePredictionChart client:load />
+
+The model gets the exact decade right 59% of the time, and lands within one decade 83% of the time. The diagonal is unmistakable: Congressional speech is dateable from content alone. The 1970s through 2000s are the easiest to place (75-83% exact), while the 1890s and 1900s are the hardest (33-38%) — the language changed more slowly in that era.
+
+## Closing
+
+Each of these queries is doing something that, ten years ago, would have been a Python script with an API client, rate limiting, retry logic, a results pipeline, and a serialization format. Now they're SQL. The warehouses got there first, but you don't need a warehouse: a parquet file, a binary, and a batch API are enough.
+
+qlm is on [GitHub](https://github.com/doublewordai/qlm) (`cargo install qlm`). The README has the full function reference, including semantic search via `vector_search()`, which didn't make it into this post.
