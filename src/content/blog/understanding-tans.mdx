@@ -1,0 +1,183 @@
+---
+title: 'tANS: precomputing rANS'
+description: |
+  An intro to tANS: a table-based entropy coder that removes rANS's per-symbol division while keeping Shannon-optimal compression.
+pubDate: '27 Apr 2026'
+index: true
+---
+
+{/* STATUS: Complete */}
+
+
+In [Also-rANS](/blog/understanding-rans), I walked through rANS: pack a stream of symbols into a single integer via reversible arithmetic, hit the Shannon limit asymptotically, no rounding to whole bits.
+
+The cost shows up at runtime. Encoding takes a division ($\lfloor x / f_s \rfloor$); decoding takes another ($\lfloor x' / M \rfloor$). On modern hardware integer division takes tens of cycles, where multiplication takes a few. For a compressor that wants to push gigabytes per second through a single core, division on the hot path is too expensive.
+
+tANS removes the division. We tighten rANS's renormalization invariant until there are only finitely many possible states, then precompute every transition and store it in a table. Per-symbol work collapses to a table lookup and a shift.
+
+The compression is the same as rANS in the limit — same Shannon bound, same fractional-bit costs — but the implementation looks completely different. Encoding becomes a state machine driven by a precomputed transition table; decoding becomes a table walk that reads bits from a stream and emits symbols. tANS is what powers Yann Collet's [FSE](https://github.com/Cyan4973/FiniteStateEntropy) library and Zstandard's entropy stage.
+
+## The slot picture, revisited
+
+ANS coders share a common shape. There's a state $x$ — a single integer that evolves as we encode each symbol. There's a frequency table $\{f_s\}$ over the alphabet, with total $M = \sum_s f_s$. And there's renormalization, which keeps $x$ inside some chosen range $[L, bL)$ by spilling low digits to (or refilling from) an output stream as the state grows or shrinks. $L$ is a lower bound; $b$ is the base of the stream, typically $2$ (bits) or $256$ (bytes).
+
+The state and the alphabet meet in a *slot table*. Allocate the integers $[0, M)$ to symbols, giving each $s$ exactly $f_s$ slots. For our running alphabet ($f_A = 4, f_B = 3, f_C = 1, M = 8$), one valid allocation is
+
+```txt
+[A, A, A, A, B, B, B, C]
+```
+
+The decoder consults this table at every step. Compute the slot index $x \bmod M$, look up which symbol owns it. That's the next emitted symbol.
+
+tANS's tightening choice is to set $L = M$ and $b = 2$. The state now lives in $[L, 2L)$, an interval containing exactly $L = M$ integers — the same size as the slot space.
+
+In rANS, the state space is much bigger than the slot space. Many different states share the same slot, and $x \bmod M$ extracts the slot from the state as a feature. In tANS, the two are in bijection: the eight states $\{8, 9, \ldots, 15\}$ map one-to-one onto the eight slots $\{0, 1, \ldots, 7\}$, with $x - L$ giving the slot index directly.
+
+This changes what the state *is*. There are now only $L$ possible states, and each is permanently associated with a single symbol — the one that owns its slot. State $8$ is an $A$ state. State $15$ is a $C$ state. The state isn't a number that contains a slot; it *is* a slot.
+
+The decoder no longer computes $x \bmod M$ to find the next symbol — the state already is one. The interesting question is what happens to the state next, after a symbol is emitted.
+
+## Decoding via a table
+
+The decoder has two jobs at each step: emit the symbol associated with the current state, and transition to the next state. The first is a lookup in the slot table. The second needs work.
+
+In rANS, the decode transition is
+
+$$
+x_{prev} = \left\lfloor \frac{x'}{M} \right\rfloor \cdot f_s + (x' \bmod M - c_s)
+$$
+
+For tANS, $x'$ sits in $[L, 2L)$ and $L = M$, so $\lfloor x' / M \rfloor = 1$ always. The formula collapses to
+
+$$
+x_{prev} = f_s + (x' - L - c_s)
+$$
+
+The expression $x' - L - c_s$ is the offset of $x'$'s slot inside symbol $s$'s range $[c_s, c_s + f_s)$ — a number in $[0, f_s)$. So $x_{prev}$ lands in $[f_s, 2 f_s)$.
+
+For our running alphabet, that means decoding from an A state lands at $x_{prev} \in [4, 8)$; a B state, $x_{prev} \in [3, 6)$; the C state, $x_{prev} = 1$. All of these are below $L = 8$, so the transition needs renormalization: pull bits from the stream into the low end of $x$ until it's back in $[L, 2L)$.
+
+Crucially, the number of refill bits is fully determined by which state we're decoding from. Decoding from state $15$ produces C and lands at $x_{prev} = 1$, which needs three refills to reach $[8, 16)$. State $12$ produces B and lands at $x_{prev} = 3$, which needs two. States $13$ and $14$ (also B) land at $x_{prev} = 4$ and $5$, each needing one refill. All four A-states need exactly one.
+
+Everything the decoder needs — symbol, pre-refill state, refill count — depends only on the current state. So precompute it:
+
+```txt
+state  symbol  x_prev  refills
+8      A       4       1
+9      A       5       1
+10     A       6       1
+11     A       7       1
+12     B       3       2
+13     B       4       1
+14     B       5       1
+15     C       1       3
+```
+
+A decode step is now: look up the row for the current state, emit the symbol, pull `refills` bits off the stream into the low end of `x_prev`, set the state to the result. No division.
+
+A worked example. We'll construct the encoded form properly in the next section; for now take it on faith that the message $A, B, C$ encodes to starting state $x = 10$ with bit stream $[0, 0, 0, 1, 1, 0]$, rightmost bit popped first.
+
+**Decode at $x = 10$**: A, $x_{prev} = 6$, 1 refill. Pop $0$ → state $6 \cdot 2 + 0 = 12$.
+
+**Decode at $x = 12$**: B, $x_{prev} = 3$, 2 refills. Pop $1$ → state $3 \cdot 2 + 1 = 7$. Pop $1$ → state $7 \cdot 2 + 1 = 15$.
+
+**Decode at $x = 15$**: C, $x_{prev} = 1$, 3 refills. Pop $0$ → $2$, pop $0$ → $4$, pop $0$ → $8$.
+
+The stream is empty and the state is $8$ — the seed. Decoded message: $A, B, C$.
+
+## Encoding via a table
+
+Encoding inverts decoding. Given the current state $x \in [L, 2L)$ and a symbol $s$ to encode, find the unique $x' \in [L, 2L)$ such that the decoder, starting at $x'$, emits $s$ and lands back at $x$ after refilling from the stream.
+
+The decoder at $x'$ ran two steps: compute $x_{prev} = f_s + (x' - L - c_s)$, then refill bits from the stream into the low end of $x_{prev}$ until back in $[L, 2L)$. Inverting, the encoder:
+
+1. Spills enough low bits of $x$ to drop it into $[f_s, 2 f_s)$. The spill count $k$ is the smallest non-negative integer with $\lfloor x / 2^k \rfloor \in [f_s, 2 f_s)$.
+2. Sets $x_{prev} = \lfloor x / 2^k \rfloor$.
+3. Computes $x' = L + c_s + (x_{prev} - f_s)$.
+
+Step 3 inverts the decoder's slot lookup: $x_{prev} - f_s$ is the offset within $s$'s range, $c_s$ shifts to the absolute slot index, and $+L$ converts slot to state.
+
+Both the spill count and the next state depend only on $x$ and $s$, so encoding is also table-driven. Implementations store a `(state, symbol) → (spill count, next state)` table; the spilled bits themselves are just `x mod 2^k`, appended low-bit-first.
+
+For our running alphabet, encoding A always spills 1 bit; encoding C always spills 3. Both match Shannon: $\log_2(8/4) = 1$ and $\log_2(8/1) = 3$. Encoding B spills 1 bit from low states (8–11) and 2 bits from high states (12–15) — averaging closer to $1.5$ bits than Shannon's $1.415$. The gap is the slot allocation's fault; the next section shows how a smarter spread closes it.
+
+A worked example. Encode the message $A, B, C$ from seed state $L = 8$. Encoding processes the message in reverse, so encode C first.
+
+**Encode C from $x = 8$**: $k = 3$. Append the three low bits of $8$: $0, 0, 0$. $x_{prev} = 1$. New state $x' = 8 + 7 + 0 = 15$.
+
+**Encode B from $x = 15$**: $k = 2$, since $\lfloor 15/2 \rfloor = 7$ overshoots $[3, 6)$. Append the two low bits of $15$: $1, 1$. $x_{prev} = 3$. New state $x' = 8 + 4 + 0 = 12$.
+
+**Encode A from $x = 12$**: $k = 1$. Append the low bit of $12$: $0$. $x_{prev} = 6$. New state $x' = 8 + 0 + 2 = 10$.
+
+Final state $10$, stream $[0, 0, 0, 1, 1, 0]$ in append order — the same encoded form decoded in the previous section.
+
+## Building the tables: spreading symbols
+
+The slot table has been a free parameter throughout. The contiguous allocation $[A, A, A, A, B, B, B, C]$ was an arbitrary choice; the previous section showed the cost — encoding B averages $\sim 1.5$ bits per symbol against Shannon's $1.415$.
+
+The layout matters because the encode spill count depends on the current state. With contiguous slots, the B-states are $12$, $13$, and $14$ — the upper half of $[L, 2L)$, where encoding B costs $2$ bits instead of $1$. Whenever the encoder lands in a B-state and the next symbol is also B, we pay the extra bit. Clustering symbols together creates state correlations that hurt amortized cost.
+
+The fix: spread each symbol's slots roughly uniformly across $[0, L)$. A symbol with $f_s$ slots should land roughly once every $L / f_s$ positions, regardless of which symbol came before.
+
+Yann Collet's heuristic does this with one hash-like walk. Set the stride $\sigma = L/2 + L/8 + 3 \approx 5L/8$. Walk a cursor around $[0, L)$, stepping by $\sigma$ modulo $L$ each time, and place each symbol $f_s$ times in succession before moving to the next. The intuition: $5L/8$ is far from any small rational fraction, so the orbit doesn't cluster; the $+3$ keeps the stride coprime to $L$ for power-of-two sizes, so every position is visited exactly once before the cursor returns.
+
+To see the spread do anything interesting, bump our running example up to $f_A = 8, f_B = 6, f_C = 2, M = L = 16$ — same probabilities, more states. The stride is $\sigma = 8 + 2 + 3 = 13$. Starting from cursor $0$ and stepping by $13 \bmod 16$, the first eight visits go to A, the next six to B, the last two to C:
+
+```txt
+A: 0, 13, 10, 7, 4, 1, 14, 11
+B: 8, 5, 2, 15, 12, 9
+C: 6, 3
+```
+
+Sorted by position, the slot table reads
+
+```txt
+position:  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+symbol:    A  A  B  C  A  B  C  A  B  B  A  A  B  A  A  B
+```
+
+Each symbol is sprinkled across the full range with no contiguous runs. With this spread, the encoder's bit costs hit Shannon much more closely. B's amortized cost drifts toward $1.415$, and the slack continues to close as $L$ grows.
+
+## Putting it together
+
+Here is complete tANS in pseudocode. Pick a state range $[L, 2L)$ with $L = M = \sum_s f_s$, build the spread and the encode/decode tables, and run the loops.
+
+```python
+def build_spread(freq, L):
+    """Yann's hash-like walk: place each symbol f_s times, stepping by sigma."""
+    sigma = (L >> 1) + (L >> 3) + 3
+    spread = [None] * L
+    cursor = 0
+    for s, (f, _) in freq.items():
+        for _ in range(f):
+            spread[cursor] = s
+            cursor = (cursor + sigma) % L
+    return spread
+
+def encode(message, freq, L, encode_table):
+    x = L                                # seed state
+    stream = []
+    for s in reversed(message):          # process LIFO
+        f, _ = freq[s]
+        while x >= 2 * f:                # spill low bit until x in [f, 2f)
+            stream.append(x & 1)
+            x >>= 1
+        x = encode_table[s][x - f]       # look up next state
+    return x, stream
+
+def decode(x, stream, decode_table, L, n):
+    message = []
+    for _ in range(n):
+        s, x_prev, refills = decode_table[x - L]
+        message.append(s)
+        for _ in range(refills):         # refill bits until back in [L, 2L)
+            x_prev = (x_prev << 1) | stream.pop()
+        x = x_prev
+    return message
+```
+
+The `encode_table` and `decode_table` are built once from the spread and reused for every message. `encode_table[s][r]` is the next state when encoding $s$ with $x_{prev} = f_s + r$. `decode_table[i]` is the triple $(s, x_{prev}, \text{refills})$ for state $L + i$.
+
+The decode inner loop is what makes tANS fast. Per symbol: one table lookup, one append, a handful of shifts and bitwise-ors, a stack pop. No division, no symbol search, no variable-length prefix code. Encoding is similarly cheap, with the spill loop usually running for one or two iterations. This is why tANS sits at the heart of FSE and Zstandard's entropy stage: all the per-symbol work happens in tight loops over precomputed data.
+
+That is tANS. A finite state machine with each state labelled by a symbol, encode and decode tables that turn every step into a few lookups and bit shifts, and a spread that distributes symbols evenly across the state space. Same Shannon-bounded compression as rANS, at table-driven speed.
