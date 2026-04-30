@@ -5,8 +5,6 @@ description: |
 pubDate: 'Sep 23 2025'
 ---
 
-import Sidenote from '../../components/Sidenote.astro'
-
 I talked a bit [here](/blog/scheduling-in-inference-engines) about how we do
 scheduling in inference engines.
 
@@ -17,7 +15,9 @@ problem to make scheduling easier.
 
 > And you have to realize that there are not very many things that have aged
 > as well as the scheduler. Which is just another proof that scheduling is
-> easy. <Sidenote> L. Torvalds. The Linux Kernel Mailing List. [here](http://tech-insider.org/linux/research/2001/1215.html), Feb. 2001. </Sidenote>
+> easy.[>1]
+
+[>1]: L. Torvalds. The Linux Kernel Mailing List. [here](http://tech-insider.org/linux/research/2001/1215.html), Feb. 2001.
 
 The scheduling problem in LLM inference engines is analogous to a problem that
 people wrestle with in operating system design: thread scheduling. Users want
@@ -45,7 +45,9 @@ There are a few different algorithms that are proposed.
 
 Each process joins a queue. The scheduler picks the first process in the queue,
 and runs it to completion. It then picks the next process in the queue, and
-runs it to completion. And so on, and so on.<Sidenote>This is how we do it in LLM inference [currently](/blog/scheduling-in-inference-engines) </Sidenote>
+runs it to completion. And so on, and so on.[>2]
+
+[>2]: This is how we do it in LLM inference [currently](/blog/scheduling-in-inference-engines).
 
 ```
   ┌────────────────────────────────────┐
@@ -102,12 +104,11 @@ currently running job joins the queue, preempt the running job and replace it.
 
 ## How can we do shortest remaining time scheduling for LLMs
 
-Shortest remaining time scheduling has a nice property - it minimizes the <Sidenote>
-It does this by disadvantaging users that want a lot of tokens. But once
-you've finished growing the pie, you've got to figure out how to divide it up
-optimally. </Sidenote>
-average waiting time for users. In the LLM context, this is effectively the
+Shortest remaining time scheduling has a nice property - it minimizes the
+average waiting time for users.[>3] In the LLM context, this is effectively the
 'average' time between tokens.
+
+[>3]: It does this by disadvantaging users that want a lot of tokens. But once you've finished growing the pie, you've got to figure out how to divide it up optimally.
 
 The problem (this is always the problem with SJF/SRT) is that you don't know
 ahead of time how long each job is going to take. Really what we need is some
@@ -138,12 +139,15 @@ tokens_query = "What's the capital of spain? \
 
 There are lots of ways to take advantage of this? For example, if we do
 [disaggregated
-prefill](https://docs.vllm.ai/en/v0.9.2/features/disagg_prefill.html)<Sidenote>[here](https://github.com/ai-dynamo/dynamo),
-[here](https://lmsys.org/blog/2025-05-05-large-scale-ep/)</Sidenote>, then we
+prefill](https://docs.vllm.ai/en/v0.9.2/features/disagg_prefill.html)[>4], then we
 compute the prefill query on a separate node, and then send the KV cache across
 to the decode machine.
 
-Instead of prefilling `original_prompt`, we can prefill `tokens_query`<Sidenote>While the appended text looks longer here, that's just because its a short example.</Sidenote>.
+[>4]: [here](https://github.com/ai-dynamo/dynamo), [here](https://lmsys.org/blog/2025-05-05-large-scale-ep/).
+
+Instead of prefilling `original_prompt`, we can prefill `tokens_query`[>5].
+
+[>5]: While the appended text looks longer here, that's just because its a short example.
 Since we get the logits 'for free', we can sample how many tokens the models
 thinks its going to use here. Then, we peel off the KV cache from the
 `original_prompt`, and send it over to the decoder.
@@ -166,19 +170,9 @@ enough to do something useful. There are a few interesting things:
 2. It doesn't really know about tokenization - so the gradient isn't $1$. But
    we just need a predictable relationship.
 
-<Sidenote unnumbered>
- A plot of the number of tokens that `google/gemma-3-12b-it` thinks it will
- generate, vs the actual number that it generates. Max number of tokens is set
- to $2000$.
+![here](../../assets/blogimages/llm-guided-scheduling/prediction_plot.png)[>_1]
 
-Postfix prompt is the following: "f"\n\nDo not answer the above
-question. Instead, just predict: how many tokens would your response be if you
-were to answer? (Note: maximum response length is \{MAX_TOKENS\}
-tokens) Respond with only a number. Be precise"
-
-</Sidenote>
-
-![here](../../assets/blogimages/llm-guided-scheduling/prediction_plot.png)
+[>_1]: A plot of the number of tokens that `google/gemma-3-12b-it` thinks it will generate, vs the actual number that it generates. Max number of tokens is set to $2000$. Postfix prompt is the following: `"f"\n\nDo not answer the above question. Instead, just predict: how many tokens would your response be if you were to answer? (Note: maximum response length is {MAX_TOKENS} tokens) Respond with only a number. Be precise"`
 
 ## What next
 
