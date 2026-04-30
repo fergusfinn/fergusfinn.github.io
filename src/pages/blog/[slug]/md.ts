@@ -12,8 +12,14 @@ export const getStaticPaths: GetStaticPaths = async () => {
 export const GET: APIRoute = async ({ props }) => {
   const { post } = props as { post: Awaited<ReturnType<typeof getCollection>>[number] }
 
-  // Return raw markdown body (without frontmatter)
-  return new Response(post.body, {
+  // Rewrite root-relative links/images to absolute fergusfinn.com URLs so
+  // mirrored consumers (e.g. blog.doubleword.ai) resolve them correctly.
+  const absolutized = post.body.replace(
+    /(\]\()(\/(?:blog|blog-images)\/)/g,
+    '$1https://fergusfinn.com$2',
+  )
+
+  return new Response(absolutized, {
     headers: {
       'Content-Type': 'text/plain; charset=utf-8',
     },

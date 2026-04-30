@@ -170,7 +170,7 @@ enough to do something useful. There are a few interesting things:
 2. It doesn't really know about tokenization - so the gradient isn't $1$. But
    we just need a predictable relationship.
 
-![here](../../assets/blogimages/llm-guided-scheduling/prediction_plot.png)[>_1]
+![here](/blog-images/llm-guided-scheduling/prediction_plot.png)[>_1]
 
 [>_1]: A plot of the number of tokens that `google/gemma-3-12b-it` thinks it will generate, vs the actual number that it generates. Max number of tokens is set to $2000$. Postfix prompt is the following: `"f"\n\nDo not answer the above question. Instead, just predict: how many tokens would your response be if you were to answer? (Note: maximum response length is {MAX_TOKENS} tokens) Respond with only a number. Be precise"`
 
