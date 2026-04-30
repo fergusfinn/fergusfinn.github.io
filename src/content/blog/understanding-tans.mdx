@@ -6,9 +6,6 @@ pubDate: '27 Apr 2026'
 index: true
 ---
 
-{/* STATUS: Complete */}
-
-
 In [Also-rANS](/blog/understanding-rans), I walked through rANS: pack a stream of symbols into a single integer via reversible arithmetic, hit the Shannon limit asymptotically, no rounding to whole bits.
 
 The cost shows up at runtime. Encoding takes a division ($\lfloor x / f_s \rfloor$); decoding takes another ($\lfloor x' / M \rfloor$). On modern hardware integer division takes tens of cycles, where multiplication takes a few. For a compressor that wants to push gigabytes per second through a single core, division on the hot path is too expensive.

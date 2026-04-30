@@ -6,22 +6,6 @@ pubDate: 'Feb 17 2026'
 slug: weighted-fallback-flattening
 ---
 
-<!--
-STATUS: Draft complete, needs review pass
-
-OUTLINE:
-- [x] Weighted random fallback - context, mechanics, the two modes, stating the problem
-- [x] Simulation - empirical confirmation, results table
-- [x] Tracing through the paths - intuition, derivation, convergence argument
-- [x] Conclusion
-
-NOTES:
-- Audience: technical, comfortable with probability notation
-- Simulation script at weighted-fallback-flattening/simulate.py
-- Models [A, B, C] with weights [0.7, 0.2, 0.1], 500k trials
-- Key result: distribution flattens toward uniform under high error rates
--->
-
 AI inference gateways often route requests across multiple upstream providers. When one of them returns a 502 or a 429, it's common to retry the request against a different provider rather than propagate the error[>0]. In the [Doubleword Control Layer](https://github.com/doublewordai/control-layer) we support two fallback strategies.
 
 [>0]: Inference providers have historically been unreliable enough that this is less of an edge case and more of a design requirement.

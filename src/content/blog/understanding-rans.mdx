@@ -6,28 +6,6 @@ pubDate: '21 Apr 2026'
 index: true
 ---
 
-{/*
-STATUS: Draft in progress
-
-OUTLINE:
-- [x] Section 1: What Huffman can't do
-- [x] Section 2: Encoding a sequence into an integer
-- [x] Section 3: Decoding reverses it
-- [ ] Section 4: Why does this work? The slot picture (skipped for now)
-- [x] Section 5: Renormalization
-- [x] Section 6: Putting it together
-
-INTERACTIVE DIAGRAMS:
-- [ ] Encode/decode stepper (sections 2+3)
-- [ ] Slot picture number line (section 4)
-- [ ] Renormalization demo (section 5, optional)
-
-NOTES:
-- Running example: 3-symbol alphabet A=4/8, B=3/8, C=1/8
-- Audience: technical readers who know Shannon + Huffman
-*/}
-
-
 rANS is one of a family of entropy coding methods that we can use to compress
 a stream of symbols losslessly. For some set of symbols $s \in S$, w/
 accompanying probabilities $p_s$, Shannon's source coding theorem tells us that
@@ -100,10 +78,6 @@ The state walked $13 \to 25 \to 69 \to 559$. After encoding three symbols,
 our whole "code" is the single integer $559$. The entire message is packed
 into that number.
 
-{/* TODO: Interactive diagram — encode stepper.
-    Show state growth on a plot of log2(state) vs. symbols encoded, with the
-    Shannon bound drawn as a reference line. User picks symbols to encode. */}
-
 Now the payoff. Let's check how much the state grew in bits. It started at
 $\log_2(13) \approx 3.70$ bits. It ended at $\log_2(559) \approx 9.13$ bits.
 We added $5.43$ bits total. Shannon says our three symbols carry
@@ -173,9 +147,6 @@ Walking back from our encoded state $x' = 559$:
 The state walked $559 \to 69 \to 25 \to 13$, the mirror image of the
 encoding walk, and we're back at the seed. The decoded symbols appeared
 in the order $C, B, A$.
-
-{/* TODO: Interactive diagram — decode stepper.
-    Reuse the encode stepper component in reverse. */}
 
 Note the order. We encoded $A, B, C$ but decoded $C, B, A$. rANS is
 last-in-first-out. The encoder behaves like a stack, and the decoder
