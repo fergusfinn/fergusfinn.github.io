@@ -103,7 +103,7 @@ export default function EntropyBars({
           { label: '_unused', data: signUnused, backgroundColor: theme.unusedFill, borderWidth: 0 },
           { label: 'Scale (amortized)', data: scaleUsed, backgroundColor: '#8b5cf6', borderWidth: 0 },
           {
-            label: '_unused',
+            label: 'Unused budget',
             data: scaleUnused,
             backgroundColor: theme.unusedFill,
             borderWidth: 0,
