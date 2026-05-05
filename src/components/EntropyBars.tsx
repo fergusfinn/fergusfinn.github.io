@@ -73,7 +73,7 @@ export default function EntropyBars({
       for (const m of groups[bw]) {
         const alloc = FORMAT_ALLOC[m.format] || [1, 4, 3]
         const [sAlloc, eAlloc, mAlloc] = alloc
-        labels.push(m.shortLabel)
+        labels.push(`${m.shortLabel} (${m.format})`)
         modelAtIdx.push(m)
         mantUsed.push(Math.min(m.mantissa, mAlloc))
         mantUnused.push(Math.max(0, mAlloc - m.mantissa))
@@ -129,6 +129,7 @@ export default function EntropyBars({
         responsive: true,
         maintainAspectRatio: false,
         animation: { duration: 200 },
+        layout: { padding: { top: 16 } },
         plugins: {
           datalabels: { display: false },
           title: { display: !!title, text: title, font: { size: 15, weight: 'normal' }, padding: { bottom: 16 } },
@@ -165,7 +166,7 @@ export default function EntropyBars({
         },
         scales: {
           x: { stacked: true, grid: { display: false }, ticks: { maxRotation: 90, minRotation: 45, autoSkip: false, font: { size: 9 } } },
-          y: { stacked: true, title: { display: true, text: 'Bits per element' }, grid: { color: theme.grid } },
+          y: { stacked: true, title: { display: true, text: 'Bits per element' }, grid: { color: theme.grid }, grace: '8%' },
         },
       },
     })

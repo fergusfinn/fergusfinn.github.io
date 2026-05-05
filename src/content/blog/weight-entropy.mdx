@@ -101,7 +101,7 @@ If they're all clustered in a narrow magnitude band, most of the 256
 possible exponent values never appear, and the entropy collapses.
 
 It turns out they're clustered. Every trained model we measured has its
-weight magnitudes peaked sharply somewhere between $2^{-9}$ and $2^{-6}$ —
+weight magnitudes peaked sharply somewhere between $2^{-7}$ and $2^{-6}$ —
 a narrow, unimodal shape with a long left tail toward small magnitudes.
 
 [>_4]
@@ -116,7 +116,7 @@ narrow. Shift each distribution by its mean, rescale by its standard deviation, 
 
 [>_1]
 
-[>_1]: μ and β are the mean and standard deviation of log₂|w| for each model. The excluded series — Qwen3.5-122B, Qwen3.5-397B, Qwen3-VL-235B — have 'dead' weights in their MoE layers; with those removed, they look like the others.
+[>_1]: $\mu$ and $\beta$ are the mean and standard deviation of $\log_2|w|$ for each model. Weights with $|w| < 2^{-16}$ are bucketed into a separate "small" bin (visible at the left edge of the magnitude histogram) and excluded from $\mu$ and $\beta$ so a handful of MoE models with dead expert weights don't distort the collapse.
 
 <GumbelCollapse client:load defaultFormats={["BF16","FP8","MXFP8"]} />
 

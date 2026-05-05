@@ -61,7 +61,7 @@ export default function MagnitudeHistogram({
       const color = colorFor(m, rank, labCounts[m.lab])
       const dashed = m.format !== 'BF16'
       return {
-        label: m.label,
+        label: `${m.label} [${m.format}]`,
         data: labels.map((k) => m.magnitudeData[k] ?? 0),
         borderColor: color,
         backgroundColor: 'transparent',
@@ -77,7 +77,7 @@ export default function MagnitudeHistogram({
 
     chartInstance.current = new Chart(chartRef.current, {
       type: 'line',
-      data: { labels: labels.map(String), datasets },
+      data: { labels: labels.map((k) => k === -17 ? '<−16' : String(k)), datasets },
       options: {
         responsive: true,
         maintainAspectRatio: false,
