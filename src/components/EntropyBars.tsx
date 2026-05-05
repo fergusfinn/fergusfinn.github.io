@@ -2,11 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { Chart, registerables } from 'chart.js'
 import ChartDataLabels from 'chartjs-plugin-datalabels'
 import { models, ALL_FORMATS, type Model } from '../data/weight-entropy-models'
+import { useChartTheme, applyChartDefaults, type ChartTheme } from './chartTheme'
 
 if (typeof window !== 'undefined') {
   Chart.register(...registerables)
-  Chart.defaults.font.family = "'Source Sans 3', sans-serif"
-  Chart.defaults.font.size = 13
 }
 
 const FORMAT_ALLOC: Record<string, [number, number, number]> = {
@@ -24,12 +23,13 @@ interface Props {
 }
 
 export default function EntropyBars({
-  title = 'Bits allocated vs bits of entropy per element',
+  title = '',
   defaultFormats = ['BF16'],
 }: Props) {
   const chartRef = useRef<HTMLCanvasElement>(null)
   const chartInstance = useRef<Chart | null>(null)
   const [active, setActive] = useState<Set<string>>(new Set(defaultFormats))
+  const theme = useChartTheme()
 
   const visible = useMemo(
     () => models.filter((m) => active.has(m.format)),
@@ -39,6 +39,7 @@ export default function EntropyBars({
   useEffect(() => {
     if (!chartRef.current) return
     if (chartInstance.current) chartInstance.current.destroy()
+    applyChartDefaults(theme)
 
     const groups: Record<number, Model[]> = {}
     for (const m of visible) {
@@ -95,16 +96,16 @@ export default function EntropyBars({
         labels,
         datasets: [
           { label: 'Mantissa', data: mantUsed, backgroundColor: '#3b82f6', borderWidth: 0 },
-          { label: '_unused', data: mantUnused, backgroundColor: '#e5e7eb', borderWidth: 0 },
+          { label: '_unused', data: mantUnused, backgroundColor: theme.unusedFill, borderWidth: 0 },
           { label: 'Exponent', data: expUsed, backgroundColor: '#f59e0b', borderWidth: 0 },
-          { label: '_unused', data: expUnused, backgroundColor: '#e5e7eb', borderWidth: 0 },
+          { label: '_unused', data: expUnused, backgroundColor: theme.unusedFill, borderWidth: 0 },
           { label: 'Sign', data: signUsed, backgroundColor: '#10b981', borderWidth: 0 },
-          { label: '_unused', data: signUnused, backgroundColor: '#e5e7eb', borderWidth: 0 },
+          { label: '_unused', data: signUnused, backgroundColor: theme.unusedFill, borderWidth: 0 },
           { label: 'Scale (amortized)', data: scaleUsed, backgroundColor: '#8b5cf6', borderWidth: 0 },
           {
             label: '_unused',
             data: scaleUnused,
-            backgroundColor: '#e5e7eb',
+            backgroundColor: theme.unusedFill,
             borderWidth: 0,
             datalabels: {
               display: (ctx: any) => modelAtIdx[ctx.dataIndex] !== null,
@@ -118,7 +119,7 @@ export default function EntropyBars({
                 const waste = (1 - used / alloc) * 100
                 return `${waste.toFixed(0)}%`
               },
-              color: '#6b7280',
+              color: theme.mutedForeground,
               font: { size: 9 },
             },
           },
@@ -164,13 +165,13 @@ export default function EntropyBars({
         },
         scales: {
           x: { stacked: true, grid: { display: false }, ticks: { maxRotation: 90, minRotation: 45, autoSkip: false, font: { size: 9 } } },
-          y: { stacked: true, title: { display: true, text: 'Bits per element' }, grid: { color: '#e5e7eb' } },
+          y: { stacked: true, title: { display: true, text: 'Bits per element' }, grid: { color: theme.grid } },
         },
       },
     })
 
     return () => { chartInstance.current?.destroy() }
-  }, [title, visible])
+  }, [title, visible, theme])
 
   const barCount = visible.length + Math.max(0, new Set(visible.map((m) => m.bitWidth)).size - 1)
   const height = Math.max(280, Math.min(460, barCount * 22 + 140))
@@ -186,7 +187,7 @@ export default function EntropyBars({
 
   return (
     <div>
-      <FormatFilter active={active} onToggle={toggle} />
+      <FormatFilter active={active} onToggle={toggle} theme={theme} />
       <div style={{ position: 'relative', width: '100%', height: `${height}px` }}>
         <canvas ref={chartRef} />
       </div>
@@ -197,9 +198,11 @@ export default function EntropyBars({
 function FormatFilter({
   active,
   onToggle,
+  theme,
 }: {
   active: Set<string>
   onToggle: (fmt: string) => void
+  theme: ChartTheme
 }) {
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '8px' }}>
@@ -216,9 +219,9 @@ function FormatFilter({
               borderRadius: '3px',
               fontSize: '11px',
               fontWeight: 500,
-              fontFamily: "'Source Sans 3', sans-serif",
-              background: on ? '#e5e7eb' : 'transparent',
-              color: on ? '#1f2937' : '#9ca3af',
+              fontFamily: theme.fontFamily,
+              background: on ? theme.buttonActiveBg : 'transparent',
+              color: on ? theme.buttonActiveText : theme.buttonInactiveText,
               userSelect: 'none',
             }}
           >

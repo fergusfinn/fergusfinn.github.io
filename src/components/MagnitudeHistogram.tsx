@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { Chart, registerables } from 'chart.js'
 import { models, ALL_FORMATS, type Model } from '../data/weight-entropy-models'
+import { useChartTheme, applyChartDefaults, type ChartTheme } from './chartTheme'
 
 if (typeof window !== 'undefined') {
   Chart.register(...registerables)
-  Chart.defaults.font.family = "'Source Sans 3', sans-serif"
-  Chart.defaults.font.size = 13
 }
 
 const LAB_HUES: Record<string, number> = {
@@ -27,13 +26,14 @@ interface Props {
 }
 
 export default function MagnitudeHistogram({
-  title = 'Weight magnitude distribution (log₂ scale)',
+  title = '',
   xLabel = 'log₂ |weight|',
   defaultFormats = ['BF16'],
 }: Props) {
   const chartRef = useRef<HTMLCanvasElement>(null)
   const chartInstance = useRef<Chart | null>(null)
   const [active, setActive] = useState<Set<string>>(new Set(defaultFormats))
+  const theme = useChartTheme()
 
   const visible = useMemo(
     () => models.filter((m) => active.has(m.format)),
@@ -43,6 +43,7 @@ export default function MagnitudeHistogram({
   useEffect(() => {
     if (!chartRef.current) return
     if (chartInstance.current) chartInstance.current.destroy()
+    applyChartDefaults(theme)
 
     const allKeys = new Set<number>()
     for (const m of visible) {
@@ -92,13 +93,13 @@ export default function MagnitudeHistogram({
         },
         scales: {
           x: { title: { display: !!xLabel, text: xLabel }, grid: { display: false } },
-          y: { title: { display: true, text: 'Frequency (%)' }, min: 0, grid: { color: '#e5e7eb' } },
+          y: { title: { display: true, text: 'Frequency (%)' }, min: 0, grid: { color: theme.grid } },
         },
       },
     })
 
     return () => { chartInstance.current?.destroy() }
-  }, [title, xLabel, visible])
+  }, [title, xLabel, visible, theme])
 
   const toggle = (fmt: string) => {
     setActive((prev) => {
@@ -111,7 +112,7 @@ export default function MagnitudeHistogram({
 
   return (
     <div>
-      <FormatFilter active={active} onToggle={toggle} />
+      <FormatFilter active={active} onToggle={toggle} theme={theme} />
       <div style={{ position: 'relative', width: '100%', height: '380px' }}>
         <canvas ref={chartRef} />
       </div>
@@ -122,9 +123,11 @@ export default function MagnitudeHistogram({
 function FormatFilter({
   active,
   onToggle,
+  theme,
 }: {
   active: Set<string>
   onToggle: (fmt: string) => void
+  theme: ChartTheme
 }) {
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '8px' }}>
@@ -141,9 +144,9 @@ function FormatFilter({
               borderRadius: '3px',
               fontSize: '11px',
               fontWeight: 500,
-              fontFamily: "'Source Sans 3', sans-serif",
-              background: on ? '#e5e7eb' : 'transparent',
-              color: on ? '#1f2937' : '#9ca3af',
+              fontFamily: theme.fontFamily,
+              background: on ? theme.buttonActiveBg : 'transparent',
+              color: on ? theme.buttonActiveText : theme.buttonInactiveText,
               userSelect: 'none',
             }}
           >

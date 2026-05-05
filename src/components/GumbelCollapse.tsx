@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { Chart, registerables } from 'chart.js'
 import { models, ALL_FORMATS, type Model } from '../data/weight-entropy-models'
+import { useChartTheme, applyChartDefaults, type ChartTheme } from './chartTheme'
 
 if (typeof window !== 'undefined') {
   Chart.register(...registerables)
-  Chart.defaults.font.family = "'Source Sans 3', sans-serif"
-  Chart.defaults.font.size = 13
 }
 
 const LAB_HUES: Record<string, number> = {
@@ -19,12 +18,13 @@ interface Props {
 }
 
 export default function GumbelCollapse({
-  title = 'Normalized magnitude distributions',
+  title = '',
   defaultFormats = ['BF16', 'FP8', 'MXFP8'],
 }: Props) {
   const chartRef = useRef<HTMLCanvasElement>(null)
   const chartInstance = useRef<Chart | null>(null)
   const [active, setActive] = useState<Set<string>>(new Set(defaultFormats))
+  const theme = useChartTheme()
 
   const visible = useMemo(
     () => models.filter((m) => active.has(m.format) && m.gumbelData),
@@ -34,6 +34,7 @@ export default function GumbelCollapse({
   useEffect(() => {
     if (!chartRef.current) return
     if (chartInstance.current) chartInstance.current.destroy()
+    applyChartDefaults(theme)
 
     // GEV reference curve (fitted from the dataset; see note in repo history)
     const c = -0.029
@@ -91,14 +92,14 @@ export default function GumbelCollapse({
           },
         },
         scales: {
-          x: { title: { display: true, text: 'Normalized magnitude: (log₂|w| − μ) / β' }, min: -10, max: 4, grid: { color: '#e5e7eb' } },
-          y: { title: { display: true, text: 'Frequency (%)' }, min: 0, grid: { color: '#e5e7eb' } },
+          x: { title: { display: true, text: 'Normalized magnitude: (log₂|w| − μ) / β' }, min: -10, max: 4, grid: { color: theme.grid } },
+          y: { title: { display: true, text: 'Frequency (%)' }, min: 0, grid: { color: theme.grid } },
         },
       },
     })
 
     return () => { chartInstance.current?.destroy() }
-  }, [title, visible])
+  }, [title, visible, theme])
 
   const toggle = (fmt: string) => {
     setActive((prev) => {
@@ -111,7 +112,7 @@ export default function GumbelCollapse({
 
   return (
     <div>
-      <FormatFilter active={active} onToggle={toggle} />
+      <FormatFilter active={active} onToggle={toggle} theme={theme} />
       <div style={{ position: 'relative', width: '100%', height: '400px' }}>
         <canvas ref={chartRef} />
       </div>
@@ -122,9 +123,11 @@ export default function GumbelCollapse({
 function FormatFilter({
   active,
   onToggle,
+  theme,
 }: {
   active: Set<string>
   onToggle: (fmt: string) => void
+  theme: ChartTheme
 }) {
   // Only show formats that have gumbel data available
   const available = ALL_FORMATS.filter((fmt) => models.some((m) => m.format === fmt && m.gumbelData))
@@ -143,9 +146,9 @@ function FormatFilter({
               borderRadius: '3px',
               fontSize: '11px',
               fontWeight: 500,
-              fontFamily: "'Source Sans 3', sans-serif",
-              background: on ? '#e5e7eb' : 'transparent',
-              color: on ? '#1f2937' : '#9ca3af',
+              fontFamily: theme.fontFamily,
+              background: on ? theme.buttonActiveBg : 'transparent',
+              color: on ? theme.buttonActiveText : theme.buttonInactiveText,
               userSelect: 'none',
             }}
           >
