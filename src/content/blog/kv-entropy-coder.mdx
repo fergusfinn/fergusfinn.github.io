@@ -238,6 +238,10 @@ and encoding the FP8 symbols under the bin-integrated $\mathcal{N}(\mu,
 | 14B  | 2.109 | 3.79× |
 | 32B  | 2.053 | 3.90× |
 
+Composed with the underlying bf16 → FP8 quantization, that's a total compression
+of ~6.2–7.8× on the original bf16 cache (16 / 2.594 at 0.6B up to 16 / 2.053 at
+32B) — i.e. essentially 8× lossless-on-top-of-lossy for the largest target.
+
 ### What's it good for
 
 There are lots of places you could imagine making this useful. 
