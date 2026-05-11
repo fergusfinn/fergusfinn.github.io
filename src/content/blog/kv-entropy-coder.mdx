@@ -20,7 +20,8 @@ hoping they catch whatever happened. Lossless compression sidesteps the
 question entirely, by reconstructing the cache exactly.
 
 How compressible is a KV cache losslessly? Naively, the bytewise entropy of
-a bf16 cache is about 11 bits per scalar. About 30% off the top. Useful, but not really enough. And as we [showed last post](/blog/weight-entropy)[>1],
+a bf16 cache is about 11 bits per scalar, around 30% smaller than the raw
+representation. That's useful but not enough. And as we [showed last post](/blog/weight-entropy)[>1],
 this slack collapses as the bitwidth comes down. FP4 weights are within
 5-7% of saturating their format, and the same goes for caches stored at
 lower precision.
