@@ -218,6 +218,26 @@ Swept across Qwen3 target sizes:
 The bitrate falls monotonically with target size — bigger targets compress
 better, by a clean 0.9 bits/scalar from 0.6B to 32B. 
 
+### Native FP8 KV caches
+
+Lossy compression of KV caches is already well-studied. What's perhaps most
+interesting here is not only that this method stacks well with lossy
+quantization of KV caches — it's actually *more* effective when applied to
+pre-quantized KV caches. Re-running the same pipeline against an FP8 e4m3
+target (the default in vLLM's `kv_cache_dtype="fp8"`, SGLang's generic FP8
+path, and TRT-LLM's `fp8_kv` — one fp32 scale per (layer, kv), RTN to e4m3)
+and encoding the FP8 symbols under the bin-integrated $\mathcal{N}(\mu,
+\sigma^2)$ predictor:
+
+| target | b/FP8-elem | vs raw FP8 (8 b) |
+| :--- | ---: | ---: |
+| 0.6B | 2.594 | 3.08× |
+| 1.7B | 2.454 | 3.26× |
+| 4B   | 2.323 | 3.44× |
+| 8B   | 2.220 | 3.60× |
+| 14B  | 2.109 | 3.79× |
+| 32B  | 2.053 | 3.90× |
+
 ### What's it good for
 
 There are lots of places you could imagine making this useful. 
