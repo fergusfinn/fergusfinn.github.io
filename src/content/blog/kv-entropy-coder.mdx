@@ -1,0 +1,266 @@
+---
+title: 'Compressing KV caches with a related model'
+description: |
+  A KV cache is the deterministic output of a known computation, not a sample from a random source. That makes lossless compression a question about how well one model can predict another model's forward pass, with the bitrate a direct measurement of fit.
+pubDate: 'May 8 2026'
+index: true
+---
+
+## Why bother
+
+KV cache size is a bottleneck in lots of places. Storage, transfer between
+machines, memory movement on a GPU, host-RAM offload. We want it to be
+smaller.
+
+You can do this lossily. [TurboQuant](https://arxiv.org/abs/2504.19874) is a
+recent example, dropping the bit-width of K and V and absorbing the resulting
+quality loss. The cost of that route is that the loss isn't something you
+specify in advance; you find out what degraded by running evaluations and
+hoping they catch whatever happened. Lossless compression sidesteps the
+question entirely, by reconstructing the cache exactly.
+
+How compressible is a KV cache losslessly? Naively, the bytewise entropy of
+a bf16 cache is about 11 bits per scalar. About 30% off the top. Useful, but not really enough. And as we [showed last post](/blog/weight-entropy)[>1],
+this slack collapses as the bitwidth comes down. FP4 weights are within
+5-7% of saturating their format, and the same goes for caches stored at
+lower precision.
+
+[>1]: That post was about weight compression, but KV cache looks the same.
+
+So we need better compression. What gets us that is better modelling of
+how the KV cache gets produced. This post shows how to use a smaller model
+from the same family, run it on the same prompt, and let its forward pass
+power a lossless coder for the target model.
+
+## A KV cache isn't really random
+
+Quick refresher on entropy coding[>2]. You have a stream of symbols drawn
+from some distribution $p$. [Shannon's source coding
+theorem](https://en.wikipedia.org/wiki/Shannon%27s_source_coding_theorem)
+says the best any lossless coder can do, on average, is $H(p)$ bits per
+symbol. Real coders work with a *model* distribution $q$ instead of the true
+$p$, and end up paying $H(p, q) = H(p) + \mathrm{KL}(p \,\|\, q)$ bits per
+symbol. The
+[KL](https://en.wikipedia.org/wiki/Kullback%E2%80%93Leibler_divergence) term
+is the slack: the price you pay for your model not being the truth.
+
+[>2]: I've written about the mechanics of arithmetic coding before — see the [rANS](/blog/understanding-rans/) and [tANS](/blog/understanding-tans/) posts. For this post all you need is the bitrate formula above; the coder is a black box that achieves it.
+
+The KV cache isn't really a list of samples from a random source. The whole
+cache is the deterministic output of a forward pass through known weights on
+a known prompt. There's exactly one tensor it can be. So the "true"
+distribution $p$ is a delta on that tensor, and a delta has zero entropy.
+Every bit the coder spends is pure KL. The bitrate is a direct measurement
+of how badly your model $q$ misses the actual computation.
+
+What this needs, then, is not a generic statistical model of KV caches but
+a calibrated model of the specific forward pass that produced one, in a
+form an arithmetic coder can consume.
+
+## What does $q$ look like?
+
+For the coder to do anything, $q$ has to be a real distribution rather than
+a single point estimate, with nonzero mass on every value the scalar could
+take (every bf16 value, in our case), because that's what the bit budget
+gets computed from.
+
+Suppose for the moment that we had access to something that, given the
+prompt, produced a reasonable per-scalar prediction $\mu$ of the KV cache
+and a calibrated sense $\sigma^2$ of how wrong that prediction tends to be.
+The natural way to turn that into a real distribution is a Gaussian centred
+on $\mu$ with variance $\sigma^2$, so that
+$q(x) = \mathcal{N}(x;\, \mu, \sigma^2)$, in which case the cost (in nats
+per scalar) of encoding the true value splits cleanly into two terms:
+
+$$
+-\ln q(\text{KV}_\text{full}) \;=\;
+\underbrace{\tfrac{1}{2}\ln(2\pi\sigma^2)}_{\text{spread cost}}
+\;+\; \underbrace{\frac{(\text{KV}_\text{full} - \mu)^2}{2\sigma^2}}_{\text{miss cost}}.
+$$
+
+The two terms pull in opposite directions: the spread cost wants $\sigma^2$
+small, while the miss cost punishes us when $\text{KV}_\text{full}$ lands
+far from $\mu$ relative to $\sigma$, and blows up entirely if we set
+$\sigma^2$ too small for the actual error. Taking the expectation over the
+data and minimising in $\sigma^2$ puts the optimum at
+$\sigma^2 = \mathbb{E}[(\text{KV}_\text{full} - \mu)^2]$, with an expected
+per-scalar bitrate of $\tfrac{1}{2}\ln(2\pi e\, \sigma^2)$, which is just
+the log of the typical error magnitude. Better $\mu$ buys us bits directly;
+miscalibrated $\sigma^2$ wastes them either way, paying for spread we
+didn't need if too large and seeing the miss cost run away if too small.
+
+## What predicts a KV cache?
+
+The natural class of things to use as a $\mu$ predictor is any model whose
+forward pass on the same prompt carries information about the target's KV
+cache. The bitrate we can hope to reach is bounded below by the conditional
+entropy $H(\text{KV}_\text{full} \mid M_\text{pred}(\text{prompt}))$, and
+the question of how much compression is available reduces to how small that
+conditional entropy can be made by choosing $M_\text{pred}$ well.
+
+The full pipeline is then:
+
+[>_1]
+
+![Encoder/decoder pipeline for KV cache compression](/blog-images/kv-coder-pipeline.svg)
+
+[>_1]: Both sides re-run the predictor on the prompt to reconstruct the same per-scalar $(\mu, \sigma)$. Only the encoder touches the target model. The arithmetic coder turns $(\text{KV}_\text{full}, \mu, \sigma)$ into bits on the encode side, and turns $(\text{bits}, \mu, \sigma)$ back into $\text{KV}_\text{full}$ on the decode side.
+
+Both sides hold the prompt. Both sides run the predictor and reconstruct the
+same $(\mu, \sigma)$ deterministically[>3]. The encoder additionally runs the
+target model, feeds $(\text{KV}_\text{full}, \mu, \sigma)$ into the
+arithmetic coder, and emits the bitstream; the decoder consumes the
+bitstream alongside its locally-reconstructed $(\mu, \sigma)$ and recovers
+$\text{KV}_\text{full}$ exactly. The scheme is lossless because the coder
+is, and because both sides reconstruct $(\mu, \sigma)$ from the same prompt
+and the same predictor.
+
+[>3]: The predictor's forward pass has to produce bit-identical $(\mu, \sigma)$ on both sides, which means the same kernels, the same reduction order, and the same numerics; any drift and encoder and decoder are working with subtly different CDFs, which the coder doesn't tolerate.
+
+What this leaves us picking is the predictor, and the choice is a
+cost-versus-bits tradeoff bounded by two extremes. At one end the predictor
+is the target model itself, so $\mu = \text{KV}_\text{full}$ and
+$\sigma = 0$, no bits ever cross the wire, and we've paid an extra full
+target-model forward pass to compress nothing of our own forward pass,
+which is silly. At the other end the predictor outputs pure noise, so
+$\mu$ is arbitrary and $\sigma$ has to be set large enough to cover the
+bf16 range; the predictor is essentially free, but the coder ends up
+paying close to 16 bits per scalar. Real predictors sit between the two,
+and the question for any particular construction is how cheaply we can
+drive the conditional entropy down.
+
+### An optimised version of the same model
+
+The most direct predictor we can pick is an optimised version of the same
+model: same architecture, same prompt, with some structure-preserving
+optimisation applied to make it cheaper to run while keeping its forward
+pass close to the original. The output $\text{KV}_\text{opt}$ lives in the
+same shape as $\text{KV}_\text{full}$ and lies close to it elementwise,
+because a small, well-behaved perturbation of the parameters perturbs the
+forward pass in a small, structured way. The residual
+$\text{KV}_\text{full} - \text{KV}_\text{opt}$ is small and structured,
+which is exactly the regime in which $\mu = \text{KV}_\text{opt}$ pays
+cheaply under the Gaussian model from the previous section.
+
+For example, take quantisation. The optimised model is the target with its
+weights cast to a narrower format (FP8, INT4, MXFP4, and so on)[>4], and
+the perturbation in question is the rounding noise introduced at every
+weight tensor.
+
+[>4]: The predictor doesn't have to be specially constructed; quantised variants of major open-weights models ship alongside their full-precision counterparts, so both sides of the pipeline can pull the same artifact off the shelf.
+
+Quantisation is well-studied enough that we know its forward-pass error is
+small for any reasonable scheme; that property is what makes serving a
+quantised model a viable substitute for the full one in the first place,
+and the same property gives us $\text{KV}_\text{opt}$ as a low-residual
+$\mu$ for free, with no training step in sight. The per-channel statistics of the residual
+(which we plug in as $\sigma$) can be measured once on a small calibration
+set and then frozen, so encoding and decoding both reduce to running the
+quantised model on the prompt and feeding $(\mu, \sigma)$ into the coder.
+
+### A different model
+
+The predictor doesn't have to be a perturbation of the target. It can be a
+genuinely different model: different size, different family, different
+training, anything whose forward pass on the same prompt happens to carry
+information about the target's KV cache. What's now missing is a shape
+match, since the predictor's hidden size, head dimension, layer count, and
+number of attention heads all differ from the target's; we can no longer
+take the predictor's KV directly as $\mu$, and some small piece of
+machinery has to bridge the gap.
+
+[>_2]
+
+![Cross-model predictor: a smaller fine-tuned transformer's KV stack mapped through a learned linear layer to the target model's KV-cache shape, producing μ.](/blog-images/kv-coder-cross-model.svg)
+
+[>_2]: The predictor (left) is a smaller transformer with light fine-tuning; its per-layer K, V outputs are passed through a learned linear map W into the shape of the target's per-layer KV cache, giving $\mu$. The target itself (right, dashed) is frozen and never run on the predictor side; only its KV-cache shape matters here.
+
+## Early results
+
+The simplest concrete instance: predictor is the FP8 version of the target,
+$\mu = \text{KV}_\text{quant}$ taken directly, and $\sigma^2$ is fitted once on
+training data as the per-(kv, head, channel) empirical residual variance,
+pooled across positions. 
+
+We use the [Qwen3](https://huggingface.co/Qwen/Qwen3-32B-FP8) model family, since we have both:
+1. A wide range of model sizes
+2. Off the shelf fp8 block-quants for each model in the family
+
+On top of $(\mu, \sigma)$, we found that encoding under a three-component mixture boosted compression rates[>5]:
+
+$$
+q(x) \;=\; 0.95\,\mathcal{N}(x;\, \mu, \sigma^2)
+\;+\; 0.03\,\mathcal{N}(x;\, \mu, (3\sigma)^2)
+\;+\; 0.02\, \widehat{p}_\text{bf16}(x)
+$$
+
+where $\widehat{p}_\text{bf16}$ is the empirical bf16-symbol distribution
+measured on training data. The wide-Gaussian component covers
+moderately-mispredicted values; the empirical-marginal component absorbs
+deep outliers at roughly the unconditional bf16 cost (~11 bits) instead
+of letting the Gaussian's tail blow up on them.
+
+[>5]: The idea is that in practise, the distribution of 'residuals' $KV_\mathrm{full} - KV_\mathrm{quant}$ isn't really a gaussian, its long tailed, with outliers. The non-gaussianicity is not a big enough problem that its worth dropping the gaussian assumption completely, but you can get a free ~$0.1 b/s$ with these mixture components.
+
+The following results are for the held-out C4-validation set, after calibrating on 128 train examples from C4 at 1024 tokens each.
+Swept across Qwen3 target sizes:
+
+| target | $\mathcal{N}(\mu,\sigma)$ | mixture | ratio |
+| :--- | ---: | ---: | ---: |
+| 0.6B | 6.8651 | **6.7419** | 2.37× |
+| 1.7B | 6.6385 | **6.5303** | 2.45× |
+| 4B   | 6.4188 | **6.3290** | 2.53× |
+| 8B   | 6.2576 | **6.1793** | 2.59× |
+| 14B  | 6.0760 | **6.0097** | 2.66× |
+| 32B  | 5.9785 | **5.9185** | 2.70× |
+
+The bitrate falls monotonically with target size — bigger targets compress
+better, by a clean 0.9 bits/scalar from 0.6B to 32B. 
+
+### What's it good for
+
+There are lots of places you could imagine making this useful. 
+
+Compression & decompression is a primitive that lets us trade compute & latency
+for storage & bandwidth - if you take a channel (say the PCIe link from the
+host to your device, intra or inter-node bandwidth between accelerators,
+inter-datacenter links), and compress the data flowing over it by a factor
+$r$, you increase the effective bandwidth of the channel by a factor $1/r$,
+and decrease the storage requirements for the compressed data on either side
+by $r$. But your compressor & decompressor have to work at
+$\mathrm{throughput} > B/r$, which requires that they use compute on each end
+of the link, and compression/decompression has to happen for every byte,
+which adds latency on each end.
+
+Some ideas, at varying levels of wildness:
+1. **Cross-datacenter disaggregated prefill**: Disaggregated prefill is a
+   technique for improving the performance of LLM serving at scale, by
+   splitting out prefill work from decode work and transferring KV cache
+   between prefill workers and decode workers. Scaling out beyond connected
+   high-bandwidth domains is a problem though, because you have to transfer
+   such a large amount of KV cache. 
+2. **KV cache bound attention**: Beyond a certain context length, the time
+   required to transfer your KV cache to the SMs in an attention kernel becomes
+   the dominant factor in the decoding speed of your model. KV cache itself is
+   intended to save you from the cost of re-prefilling. But decompression of
+   the sort we've described [>6] is a more effective version of re-prefilling,
+   that uses FLOPs in exchange for memory bandwidth.
+3. **KV cache storage**: anywhere KV cache is stored, we benefit from it being
+   compressed. Decompression of the kind described here relies on compute being
+   colocated with storage - i.e. GPUs addressing host memory via DMA etc.
+
+ [>6]: Assuming that we can use a substantially smaller model than an fp8 quant of a bf16 model - a very big if
+
+In addition, there are many other things that change the economics of this kind
+of tradeoff. We've framed serving the smaller model as an additional cost, but
+if you're serving it already, then the cost decreases. The smaller model might
+serve double-duty as a speculator, or be an independent language modeller.
+
+Whether any of these land depends on the same question the framework itself
+runs into: how cheaply can the predictor's forward pass be made, relative to
+the target's. The FP8-of-target predictor here is the easiest instance and the
+most expensive one; everything past this point is about finding cheaper
+predictors that give up as few bits as possible.
+
+
+

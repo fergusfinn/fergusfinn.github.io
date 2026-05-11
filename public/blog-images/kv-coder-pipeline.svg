@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 460" font-family="'Berkeley Mono','Courier New',monospace">
+  <defs>
+    <style>
+      .label   { font-size: 14px; fill: #2a2a2a; }
+      .title   { font-size: 16px; font-weight: 700; fill: #2a2a2a; }
+      .tag     { font-size: 12px; fill: #555; }
+      .box     { stroke: #444; stroke-width: 1.4; }
+      .line    { stroke: #444; stroke-width: 1.4; fill: none; }
+      .divider { stroke: #bbb; stroke-width: 1; stroke-dasharray: 4,4; fill: none; }
+    </style>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 8 4.5 L 0 9 z" fill="#444"/>
+    </marker>
+  </defs>
+
+  <!-- Titles -->
+  <text class="title" x="205" y="28" text-anchor="middle">ENCODE</text>
+  <text class="title" x="605" y="28" text-anchor="middle">DECODE</text>
+
+  <!-- Center divider -->
+  <line class="divider" x1="410" y1="20" x2="410" y2="440"/>
+
+  <!-- ============ ENCODER ============ -->
+
+  <!-- prompt -->
+  <rect class="box" x="165" y="55" width="80" height="36" rx="6" fill="#eee9d8"/>
+  <text class="label" x="205" y="78" text-anchor="middle">prompt</text>
+
+  <!-- prompt forks down to target and predictor -->
+  <path class="line" d="M 205 91 L 205 110 L 110 110 L 110 130" marker-end="url(#arrow)"/>
+  <path class="line" d="M 205 91 L 205 110 L 300 110 L 300 130" marker-end="url(#arrow)"/>
+
+  <!-- target model -->
+  <rect class="box" x="50" y="130" width="120" height="50" rx="10" fill="#f4d6c0"/>
+  <text class="label" x="110" y="160" text-anchor="middle">target model</text>
+
+  <!-- predictor (encoder) -->
+  <rect class="box" x="240" y="130" width="120" height="50" rx="10" fill="#cee2f5"/>
+  <text class="label" x="300" y="160" text-anchor="middle">predictor</text>
+
+  <!-- target -> coder (KV_full) -->
+  <path class="line" d="M 110 180 L 110 248 L 175 248 L 175 270" marker-end="url(#arrow)"/>
+  <text class="tag" x="118" y="220">KV_full</text>
+
+  <!-- predictor -> coder ((μ,σ)) -->
+  <path class="line" d="M 300 180 L 300 248 L 235 248 L 235 270" marker-end="url(#arrow)"/>
+  <text class="tag" x="270" y="220" text-anchor="end">(μ, σ)</text>
+
+  <!-- coder (encoder) -->
+  <rect class="box" x="145" y="270" width="120" height="50" rx="10" fill="#d4e8d0"/>
+  <text class="label" x="205" y="300" text-anchor="middle">coder</text>
+
+  <!-- ============ DECODER ============ -->
+
+  <!-- prompt -->
+  <rect class="box" x="565" y="55" width="80" height="36" rx="6" fill="#eee9d8"/>
+  <text class="label" x="605" y="78" text-anchor="middle">prompt</text>
+
+  <!-- prompt -> predictor -->
+  <path class="line" d="M 605 91 L 605 130" marker-end="url(#arrow)"/>
+
+  <!-- predictor (decoder) -->
+  <rect class="box" x="545" y="130" width="120" height="50" rx="10" fill="#cee2f5"/>
+  <text class="label" x="605" y="160" text-anchor="middle">predictor</text>
+
+  <!-- predictor -> coder ((μ,σ)) -->
+  <path class="line" d="M 605 180 L 605 270" marker-end="url(#arrow)"/>
+  <text class="tag" x="613" y="225">(μ, σ)</text>
+
+  <!-- coder (decoder) -->
+  <rect class="box" x="545" y="270" width="120" height="50" rx="10" fill="#d4e8d0"/>
+  <text class="label" x="605" y="300" text-anchor="middle">coder</text>
+
+  <!-- coder -> KV_full -->
+  <path class="line" d="M 605 320 L 605 370" marker-end="url(#arrow)"/>
+  <rect class="box" x="565" y="370" width="80" height="36" rx="6" fill="#eee9d8"/>
+  <text class="label" x="605" y="393" text-anchor="middle">KV_full</text>
+
+  <!-- ============ BITSTREAM (encoder coder -> decoder coder) ============ -->
+  <path class="line" d="M 265 295 L 545 295" marker-end="url(#arrow)" stroke-width="1.6"/>
+  <text class="tag" x="405" y="287" text-anchor="middle">bits</text>
+</svg>
