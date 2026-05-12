@@ -1,7 +1,7 @@
 ---
-title: 'Speculative KV coding: losslessly compressing KV cache by up to ~4× using a draft model'
+title: 'Speculative KV coding: losslessly compressing KV cache by up to ~4× using a predictor model'
 description: |
-  A KV cache is the deterministic output of a known computation, not a sample from a random source. That makes lossless compression a question about how well one model can predict another model's forward pass, with the bitrate a direct measurement of fit.
+  A KV cache is the deterministic output of a known computation, not a sample from a random source. That makes lossless compression a measurement of how well one model can predict another's forward pass — and gives us up to 4× lossless compression of a target's KV cache using a cheaper predictor model.
 pubDate: 'May 8 2026'
 index: true
 ---
