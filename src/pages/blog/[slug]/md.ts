@@ -19,7 +19,16 @@ export const GET: APIRoute = async ({ props }) => {
     '$1https://fergusfinn.com$2',
   )
 
-  return new Response(absolutized, {
+  // Unwrap JSX-expression-wrapped <style> blocks (`<style>{` ... `}</style>`)
+  // into plain `<style>...</style>` so mirrored consumers can render the CSS
+  // directly. The wrapper exists because MDX otherwise parses CSS braces as
+  // JSX expression syntax.
+  const styleUnwrapped = absolutized.replace(
+    /<style>\{`([\s\S]*?)`\}<\/style>/g,
+    '<style>$1</style>',
+  )
+
+  return new Response(styleUnwrapped, {
     headers: {
       'Content-Type': 'text/plain; charset=utf-8',
     },
