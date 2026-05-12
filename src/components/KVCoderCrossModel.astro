@@ -1,0 +1,80 @@
+---
+const { class: className } = Astro.props
+---
+
+<svg
+	xmlns="http://www.w3.org/2000/svg"
+	viewBox="0 0 760 420"
+	class:list={['kv-coder-svg', className]}
+	font-family="'Berkeley Mono','Courier New',monospace"
+	role="img"
+	aria-label="Cross-model predictor: a smaller fine-tuned transformer's KV stack mapped through a learned linear layer to the target model's KV-cache shape, producing μ."
+>
+	<defs>
+		<marker
+			id="kv-coder-cross-arrow"
+			markerWidth="9"
+			markerHeight="9"
+			refX="7"
+			refY="4.5"
+			orient="auto"
+			markerUnits="strokeWidth"
+		>
+			<path class="arrow-fill" d="M 0 0 L 8 4.5 L 0 9 z" />
+		</marker>
+	</defs>
+
+	<!-- Titles -->
+	<text class="title" x="150" y="28" text-anchor="middle">predictor</text>
+	<text class="sub" x="150" y="46" text-anchor="middle">(small, fine-tuned)</text>
+
+	<text class="title" x="610" y="28" text-anchor="middle">target model</text>
+	<text class="sub" x="610" y="46" text-anchor="middle">(large, frozen)</text>
+
+	<!-- ============ Predictor stack ============ -->
+	<rect class="box" x="80" y="70" width="140" height="50" rx="8" fill="#cee2f5" />
+	<text class="label" x="150" y="100" text-anchor="middle">layer L</text>
+
+	<rect class="box" x="80" y="130" width="140" height="50" rx="8" fill="#cee2f5" />
+	<text class="label" x="150" y="160" text-anchor="middle">⋮</text>
+
+	<rect class="box" x="80" y="190" width="140" height="50" rx="8" fill="#cee2f5" />
+	<text class="label" x="150" y="220" text-anchor="middle">layer 2</text>
+
+	<rect class="box" x="80" y="250" width="140" height="50" rx="8" fill="#cee2f5" />
+	<text class="label" x="150" y="280" text-anchor="middle">layer 1</text>
+
+	<path class="bracket" d="M 230 75 L 240 75 L 240 295 L 230 295" />
+
+	<!-- ============ Target stack ============ -->
+	<rect class="box frozen" x="540" y="70" width="140" height="44" rx="8" fill="#f4d6c0" />
+	<text class="label" x="610" y="97" text-anchor="middle">layer N</text>
+
+	<rect class="box frozen" x="540" y="120" width="140" height="44" rx="8" fill="#f4d6c0" />
+	<text class="label" x="610" y="147" text-anchor="middle">⋮</text>
+
+	<rect class="box frozen" x="540" y="170" width="140" height="44" rx="8" fill="#f4d6c0" />
+	<text class="label" x="610" y="197" text-anchor="middle">⋮</text>
+
+	<rect class="box frozen" x="540" y="220" width="140" height="44" rx="8" fill="#f4d6c0" />
+	<text class="label" x="610" y="247" text-anchor="middle">layer 3</text>
+
+	<rect class="box frozen" x="540" y="270" width="140" height="44" rx="8" fill="#f4d6c0" />
+	<text class="label" x="610" y="297" text-anchor="middle">layer 2</text>
+
+	<rect class="box frozen" x="540" y="320" width="140" height="44" rx="8" fill="#f4d6c0" />
+	<text class="label" x="610" y="347" text-anchor="middle">layer 1</text>
+
+	<path class="bracket" d="M 530 75 L 520 75 L 520 360 L 530 360" />
+
+	<!-- ============ W box ============ -->
+	<rect class="box" x="350" y="180" width="60" height="36" rx="6" fill="#d4e8d0" />
+	<text class="label" x="380" y="203" text-anchor="middle">W</text>
+
+	<!-- Arrows + labels -->
+	<path class="line" d="M 250 198 L 350 198" marker-end="url(#kv-coder-cross-arrow)" />
+	<text class="tag" x="300" y="190" text-anchor="middle">K, V</text>
+
+	<path class="line" d="M 410 198 L 520 198" marker-end="url(#kv-coder-cross-arrow)" />
+	<text class="tag" x="465" y="190" text-anchor="middle">μ</text>
+</svg>

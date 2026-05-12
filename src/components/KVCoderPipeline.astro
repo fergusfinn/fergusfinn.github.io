@@ -1,0 +1,106 @@
+---
+const { class: className } = Astro.props
+---
+
+<svg
+	xmlns="http://www.w3.org/2000/svg"
+	viewBox="0 0 820 460"
+	class:list={['kv-coder-svg', className]}
+	font-family="'Berkeley Mono','Courier New',monospace"
+	role="img"
+	aria-label="Encoder/decoder pipeline for KV cache compression"
+>
+	<defs>
+		<marker
+			id="kv-coder-pipeline-arrow"
+			markerWidth="9"
+			markerHeight="9"
+			refX="7"
+			refY="4.5"
+			orient="auto"
+			markerUnits="strokeWidth"
+		>
+			<path class="arrow-fill" d="M 0 0 L 8 4.5 L 0 9 z" />
+		</marker>
+	</defs>
+
+	<!-- Titles -->
+	<text class="title" x="205" y="28" text-anchor="middle">ENCODE</text>
+	<text class="title" x="605" y="28" text-anchor="middle">DECODE</text>
+
+	<!-- Center divider -->
+	<line class="divider" x1="410" y1="20" x2="410" y2="440" />
+
+	<!-- ============ ENCODER ============ -->
+
+	<rect class="box" x="165" y="55" width="80" height="36" rx="6" fill="#eee9d8" />
+	<text class="label" x="205" y="78" text-anchor="middle">prompt</text>
+
+	<path class="line" d="M 205 91 L 205 110 L 110 110 L 110 130" marker-end="url(#kv-coder-pipeline-arrow)" />
+	<path class="line" d="M 205 91 L 205 110 L 300 110 L 300 130" marker-end="url(#kv-coder-pipeline-arrow)" />
+
+	<rect class="box" x="50" y="130" width="120" height="50" rx="10" fill="#f4d6c0" />
+	<text class="label" x="110" y="160" text-anchor="middle">target model</text>
+
+	<rect class="box" x="240" y="130" width="120" height="50" rx="10" fill="#cee2f5" />
+	<text class="label" x="300" y="160" text-anchor="middle">predictor</text>
+
+	<path class="line" d="M 110 180 L 110 248 L 175 248 L 175 270" marker-end="url(#kv-coder-pipeline-arrow)" />
+	<text class="tag" x="118" y="220">KV_full</text>
+
+	<path class="line" d="M 300 180 L 300 248 L 235 248 L 235 270" marker-end="url(#kv-coder-pipeline-arrow)" />
+	<text class="tag" x="270" y="220" text-anchor="end">(μ, σ)</text>
+
+	<rect class="box" x="145" y="270" width="120" height="50" rx="10" fill="#d4e8d0" />
+	<text class="label" x="205" y="300" text-anchor="middle">coder</text>
+
+	<!-- ============ DECODER ============ -->
+
+	<rect class="box" x="565" y="55" width="80" height="36" rx="6" fill="#eee9d8" />
+	<text class="label" x="605" y="78" text-anchor="middle">prompt</text>
+
+	<path class="line" d="M 605 91 L 605 130" marker-end="url(#kv-coder-pipeline-arrow)" />
+
+	<rect class="box" x="545" y="130" width="120" height="50" rx="10" fill="#cee2f5" />
+	<text class="label" x="605" y="160" text-anchor="middle">predictor</text>
+
+	<path class="line" d="M 605 180 L 605 270" marker-end="url(#kv-coder-pipeline-arrow)" />
+	<text class="tag" x="613" y="225">(μ, σ)</text>
+
+	<rect class="box" x="545" y="270" width="120" height="50" rx="10" fill="#d4e8d0" />
+	<text class="label" x="605" y="300" text-anchor="middle">coder</text>
+
+	<path class="line" d="M 605 320 L 605 370" marker-end="url(#kv-coder-pipeline-arrow)" />
+	<rect class="box" x="565" y="370" width="80" height="36" rx="6" fill="#eee9d8" />
+	<text class="label" x="605" y="393" text-anchor="middle">KV_full</text>
+
+	<!-- ============ BITSTREAM ============ -->
+	<path
+		class="line"
+		d="M 265 295 L 545 295"
+		marker-end="url(#kv-coder-pipeline-arrow)"
+		stroke-width="1.6"
+	/>
+	<text class="tag" x="405" y="287" text-anchor="middle">bits</text>
+</svg>
+
+<style is:global>
+	.kv-coder-svg .label      { font-size: 14px; fill: #2a2a2a; }
+	.kv-coder-svg .title      { font-size: 16px; font-weight: 700; fill: #2a2a2a; }
+	.kv-coder-svg .tag        { font-size: 12px; fill: #555; }
+	.kv-coder-svg .box        { stroke: #444; stroke-width: 1.4; }
+	.kv-coder-svg .line       { stroke: #444; stroke-width: 1.4; fill: none; }
+	.kv-coder-svg .divider    { stroke: #bbb; stroke-width: 1; stroke-dasharray: 4, 4; fill: none; }
+	.kv-coder-svg .bracket    { stroke: #777; stroke-width: 1.2; fill: none; }
+	.kv-coder-svg .sub        { font-size: 11px; fill: #666; font-style: italic; }
+	.kv-coder-svg .frozen     { stroke-dasharray: 4, 3; }
+	.kv-coder-svg .arrow-fill { fill: #444; }
+
+	.dark .kv-coder-svg .title   { fill: #e5e5e5; }
+	.dark .kv-coder-svg .tag,
+	.dark .kv-coder-svg .sub     { fill: #aaa; }
+	.dark .kv-coder-svg .line    { stroke: #bbb; }
+	.dark .kv-coder-svg .bracket { stroke: #999; }
+	.dark .kv-coder-svg .divider { stroke: #555; }
+	.dark .kv-coder-svg .arrow-fill { fill: #bbb; }
+</style>
