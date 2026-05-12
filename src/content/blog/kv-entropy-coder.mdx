@@ -402,18 +402,12 @@ Some places that could pay off:
    Kimi team argues the cross-DC version becomes viable once KV size is cut
    enough, getting 10–36× reductions from hybrid attention. Speculative KV coding compresses what's left, losslessly, and
    stacks multiplicatively with that lever.
-2. **KV-bound attention**: At long context, decode speed is limited by getting
-   the KV cache from HBM to the SMs. KV caching exists to save you from
-   re-prefilling; decompressing on the fly is a much cheaper re-prefill[>9],
-   trading FLOPs for memory bandwidth.
-3. **Bigger prefix caches**: LLM serving caches KV for shared prefixes
+2. **Bigger prefix caches**: LLM serving caches KV for shared prefixes
    (system prompts, retrieved documents, repeated turns in agentic loops) so
    requests don't re-prefill them. Compressing stored entries grows the effective cache at the cost of a
    decompression pass on each hit. The same idea extended to host-RAM offload
    across PCIe pays for itself more cleanly: you spend decompression compute
    to shrink a transfer that's already bandwidth-bound.
-
-[>9]: Only if the predictor is substantially cheaper to run than the target, which the FP8-of-target instance here isn't.
 
 
 The question that comes up in each is: can we make the predictor pay for
