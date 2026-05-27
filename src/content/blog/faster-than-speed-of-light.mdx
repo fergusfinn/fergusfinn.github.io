@@ -6,6 +6,9 @@ pubDate: '26 May 2026'
 index: true
 ---
 
+import AmplificationVsStreamLength from '../../components/AmplificationVsStreamLength.tsx'
+import KernelBandwidthBars from '../../components/KernelBandwidthBars.tsx'
+
 An [earlier post](https://fergusfinn.com/blog/weight-entropy/) on this blog
 measured the entropy of the weights of a handful of modern open-weight models
 and found real headroom between the bit-width those weights are stored at and
@@ -200,14 +203,20 @@ There's a parallelism-vs-compression tradeoff. Short streams give the GPU more
 parallel work but pay the metadata cost more often per byte; long streams
 compress better but offer fewer threads to keep busy. There are other penalties
 to long streams too when it comes to writing fast kernels -- for example, they
-increase warp divergence. For the 4090 we land around 1024 FP8 bytes per
-stream, about a million streams across a 1 GiB working set, which we find to be
-a balance short enough to keep the SMs saturated and long enough that the
+increase warp divergence. For the 4090 we land around 512 FP8 bytes per stream,
+about two million streams across a 1 GiB working set, which we find to be a
+balance short enough to keep the SMs saturated and long enough that the
 per-stream metadata doesn't dominate. To keep the decoder cheap at that stream
 count, the codec pair-codes the exponent stream: a single state transition
 emits two exponent symbols at once, halving the table-lookup work per output
 byte. The full encoder and decoder kernel are open source at
-[`doublewordai/rans-vectoradd`](https://github.com/doublewordai/rans-vectoradd).
+[`doublewordai/tans-vectoradd`](https://github.com/doublewordai/tans-vectoradd).
+
+[>_2]
+
+[>_2]: RTX 4090, 1 GiB working set. Compression improves monotonically with N; amplification peaks where the compression headroom and the GPU's parallelism budget balance. The dashed horizontal line is break-even with the raw kernel.
+
+<AmplificationVsStreamLength client:load />
 
 ## The result
 
@@ -218,7 +227,16 @@ decodes them inside the kernel before adding.
 
 On a 1 GiB working set, the raw baseline takes 3.57 ms and the fused kernel
 takes 3.24 ms. That's a **1.10× amplification**, or about 10% faster than the
-raw kernel.
+raw kernel. Translated into effective bandwidth, the fused kernel delivers
+about 993 GB/s of logical FP8 throughput, comfortably above the ~927 GB/s
+practical ceiling that any uncompressed elementwise kernel achieves on this
+chip.
+
+[>_3]
+
+[>_3]: All measurements on the same RTX 4090, 1 GiB working set, FP8 elements. The CCCL bar is FP32 (binary_transform doesn't dispatch on bf16/fp8) but the access pattern is identical. The dashed reference line is the chip's rated HBM bandwidth from the spec sheet.
+
+<KernelBandwidthBars client:load />
 
 The measurement is consistent with the obvious model of what's happening. The
 raw vecadd reads two bytes per FP8 output and writes one, for three bytes of
