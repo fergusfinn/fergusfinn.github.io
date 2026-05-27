@@ -263,18 +263,25 @@ shipping [data memory-dependent prefetchers](https://gofetch.fail/) that
 inspect loaded cache lines and speculatively dereference any value that looks
 like a pointer; the speedup depends on what the data actually contains. 
 
-Getting practical results on a 4090 an existence proof that these sorts of
-techniques can be useful. But, the road to using this stuff in a production kernel
-is steep. Strictly memory bound kernels are a small fraction of forward
-pass time. The meaningful place to land this kind of optimization is in low
-latency decode -- where smaller batch sizes & compute unfriendly architectures
-(specifically, MoEs) make it impossible to push into the compute-bound regime.
+Getting practical results on a 4090 is an existence proof that these sorts of
+techniques can be useful. But the road to a production kernel is steep. Most
+forward-pass time at training and prefill is compute-bound: GEMMs saturate the
+tensor cores, and compression there buys nothing. The kernels where bandwidth
+actually dominates are the ones with structurally low arithmetic intensity:
+elementwise activations and norms (one op per byte by construction), attention
+at decode (each token reads the full KV cache), and MoE GEMMs at decode (tokens
+spread thinly across experts, so each expert's GEMM runs at small effective
+batch).
 
 How to go beyond consumer GPUs? Datacenter GPUs are a different shape:
 Hopper-class GPUs have memory bandwidth around 4 TB/s, four to five times
-faster than a 4090. The binding constraint are the ALUs. The INT32
-ops-per-cycle per SM
+faster than a 4090. The decoder costs a handful of INT32 ops per byte:
+state transition, LDS lookup, bit extract, renorm. On a 4090 those ops fit
+inside the time HBM takes to deliver each byte; on Hopper the same INT32
+throughput per SM has to keep up with four times the bandwidth, so the
+per-byte op budget is four times tighter. The binding constraint flips from
+HBM to the ALU. The INT32 ops-per-cycle per SM
 [doubled](https://developer.nvidia.com/blog/nvidia-blackwell-and-nvidia-cuda-12-9-introduce-family-specific-architecture-features/)
-on Blackwell, over Ada, so there's some hope. There's no concrete theoretical
-reason why this ought to be impossible. But if our 1TB/s 4090 decoder was hard, getting up
-to Blackwell's 8 TB/s is a mountain to climb.
+on Blackwell, over Ada, so there's some hope. There's no theoretical reason
+it can't work. But if our 1TB/s 4090 decoder was hard, getting up to
+Blackwell's 8 TB/s is a mountain to climb.
