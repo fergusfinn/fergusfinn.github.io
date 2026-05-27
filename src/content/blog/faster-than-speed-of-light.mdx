@@ -1,0 +1,262 @@
+---
+title: 'Pushing memory bound kernels beyond the speed of light with lossless decompression'
+description: |
+  The fastest a memory bound kernel can go is set by the time required to transfer the data to the SMs. How can we do better?
+pubDate: '26 May 2026'
+index: true
+---
+
+An [earlier post](https://fergusfinn.com/blog/weight-entropy/) on this blog
+measured the entropy of the weights of a handful of modern open-weight models
+and found real headroom between the bit-width those weights are stored at and
+the bit-width their actual values demand. We presented it as just a fact about
+the data, and on its own it doesn't do anything for us; compressibility only
+starts to matter when something downstream runs faster, or fits somewhere it
+previously didn't. So the question we need to follow up on is operational:
+given that the weights compress, what can we actually do with the headroom?
+
+There are lots of things you could think of doing. Some
+ideas:
+
+- **Faster weight loading.** Pulling the weights off disk or across the network
+  into GPU memory is the path a [previous
+  post](https://fergusfinn.com/blog/fast-sglang-starts/) here pulled on. It
+  gets more interesting on Blackwell, where the decompression engine is in
+  hardware rather than a kernel you have to write yourself.
+- **Cheaper collectives.** Compress weights or activations in flight between
+  GPUs, so the bytes crossing the interconnect are smaller than the bytes the
+  model nominally operates on.
+- **Memory-bound kernels.** Keep the weights compressed in HBM and decompress
+  them on the fly inside the kernel that consumes them, so the same arithmetic
+  runs against fewer bytes read.
+
+The first two seem likely to be possible. The last seems hard. In this post
+we'll see if we can get any purchase on it.
+
+By way of making our lives even harder -- its no longer interesting
+to build optimizations that only apply to bf16 weights. Nobody serves a
+large model in bf16 if they can avoid it. The realistic baseline is fp8, and
+increasingly fp4, both of which have already taken a large bite out of the same
+headroom the entropy numbers were measuring. So the right question is not how
+much we can compress bf16 weights; it is how much further we can compress
+weights that are *already* quantised to fp8 or fp4, and whether what is left is
+worth the cost of the decompressor. 
+
+## What should we compare against?
+
+What we're after is a memory-bound kernel that, given inputs we've compressed
+offline, runs at an effective bandwidth above the hardware's effective peak HBM
+throughput, which is to say one that pulls more useful bytes through the pipe
+per second than we could have got otherwise. I'm running everything in this
+post on an RTX 4090, because that's what I have under my desk. The question of
+whether the trick generalises to bigger GPUs is one I'll come back to at the
+end[>1].
+
+[>1]: As it turns out, the 4090's relatively modest bandwidth makes our job
+easier rather than harder. The whole construction is conditional on the kernel
+being memory-bound, and a slower memory subsystem means more kernels stay in
+that regime.
+
+The kernel we'll use is a vector add. It's the canonical example of a
+memory-bound workload: you load two operands from HBM, do one addition, and
+write the result back, which works out to three bytes of memory traffic for
+every floating-point operation. That puts it deep into the memory-bound regime,
+where the arithmetic units spend almost all of their time waiting on bytes.
+
+```python
+import torch
+
+# 1 GiB working set per tensor (bf16 = 2 bytes per element)
+n = 512 * 1024 * 1024
+a = torch.randn(n, dtype=torch.bfloat16, device="cuda")
+b = torch.randn(n, dtype=torch.bfloat16, device="cuda")
+c = torch.add(a, b)
+```
+
+The rated HBM bandwidth of a 4090 is about 1 TB/s[>2]. We get 922 GB/s,
+about 92% of the rated peak[>3].
+
+[>2]: 1008 GB/s; GDDR6X on a 384-bit bus at 21 Gbps. From the [Ada architecture whitepaper](https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf).
+
+[>3]: NVIDIA's [CCCL `binary_transform`](https://developer.nvidia.com/blog/topping-the-gpu-mode-kernel-leaderboard-with-nvidia-cuda-compute/), their hand-tuned device-wide elementwise primitive, gets ~927 GB/s here. Essentially the same.
+
+For the operands, we want bytes that look like what a real inference kernel
+would be reading off HBM. So both operands are
+drawn from the empirical distribution of FP8 weights in
+[Qwen3-14B-FP8](https://fergusfinn.com/blog/weight-entropy/), the same
+distribution measured in the entropy post. 
+
+The quantity we're tracking is what
+I'll call *bandwidth amplification*: the ratio of the time the raw kernel takes
+on uncompressed operands to the time the fused kernel takes on compressed
+operands, end to end. An amplification of 1 means the compressed path matched
+raw and we got nothing for our trouble, and anything above 1 is the result
+we're after.
+
+## How to do parallelisable compression and decompression
+
+We've written about lossless compression in this series before, in both the
+[rANS](https://fergusfinn.com/blog/understanding-rans/) and
+[tANS](https://fergusfinn.com/blog/understanding-tans/) flavours of [asymmetric
+numeral systems](https://en.wikipedia.org/wiki/Asymmetric_numeral_systems). For
+the rest of this post we'll work with tANS specifically, because ANS coders can
+sit much closer to the Shannon limit than something like Huffman[>4], and that
+matters when the absolute gains we're chasing are on the order of ten percent.
+To make a tANS coder any use for a vector-add kernel, we need to fold it into a
+massively parallel algorithm. The problem we immediately run into is that a
+naive tANS decoder is a serial state machine: each byte of weight data, as it
+is decoded, transforms the internal state one step at a time, so the next byte
+cannot be decoded until the previous one is done. We therefore have to build a
+codec on top of tANS that exposes parallel structure for the GPU to chew on.
+
+[>4]: Huffman assigns each symbol an integer number of bits, which is wasteful when a symbol's optimal code length isn't already an integer. ANS coders effectively encode in fractional bits, and routinely sit within a fraction of a percent of the entropy.
+
+The solution is to chop the input into many independent streams at encode time, each
+decoded later by its own GPU thread[>_1]. One serial decode becomes many short
+parallel decodes, at an encoder-side cost we'll come back to.
+
+[>_1]: Each stream gets its own initial tANS state, encodes its own bytes into
+its own bit-stream, and finalises its state at the end. The compressed object
+stored in HBM is the concatenation of every stream's bit-stream, prefixed by a
+small offset table that tells the decoder where each one begins. Ignore the padding in the compressed representation of the data -- its there to make the diagram line up.
+
+```txt
+compression
+──────────────────────────────────────────────────────────────────
+
+┌────────────────────────────────────────────────────────────────┐
+│                          fp8 weights                           │
+└────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌────────────┬────────────┬────────────┬────────────┬────────────┐
+│  stream 0  │  stream 1  │  stream 2  │  stream 3  │  stream 4  │
+└────────────┴────────────┴────────────┴────────────┴────────────┘
+      │            │            │            │            │
+ CPU thread   CPU thread   CPU thread   CPU thread   CPU thread
+      ▼            ▼            ▼            ▼            ▼
+┌─┬──────────┬───────┬────┬─────┬──────┬─────┬──────┬───┬────────┐
+│0│░░░░░░░░░░│   1   │░░░░│  2  │░░░░░░│  3  │░░░░░░│ 4 │░░░░░░░░│
+└─┴──────────┴───────┴────┴─────┴──────┴─────┴──────┴───┴────────┘
+
+decompression
+──────────────────────────────────────────────────────────────────
+
+┌─┬───────┬─────┬─────┬───┐
+│0│   1   │  2  │  3  │ 4 │ ← storage, index [0, 1, 8, 13, 18]
+└─┴───────┴─────┴─────┴───┘
+                                │
+                                ▼
+ CUDA thread  CUDA thread  CUDA thread  CUDA thread  CUDA thread
+      │            │            │            │            │
+┌─────┴────────────┴────────────┴────────────┴────────────┴──────┐
+│     │            │            │            │            │      │
+│    tANS         tANS         tANS         tANS         tANS    │
+│     ▼            ▼            ▼            ▼            ▼      │
+│                              vecadd                            │
+└────────────────────────────────────────────────────────────────┘
+```
+
+## What we actually compress
+
+As we pointed out in the [earlier
+post](https://fergusfinn.com/blog/weight-entropy/) compressibility doesn't
+apply uniformly to every bit of every FP8 byte. An FP8 byte in the E4M3 format
+is eight bits, broken down as one sign bit, four exponent bits, and three
+mantissa bits. Group the byte logically into two halves: the four exponent bits
+on one side, the sign and mantissa bits on the other. Across the weights of a
+real model, the sign-and-mantissa half is close to uniform. Its entropy is
+essentially four bits per nibble. No ANS coder is going to do better than
+that, so we should avoid passing these nibbles through the codec if we can avoid it.
+
+The exponent half is a different story. Across Qwen3-14B-FP8, the bulk of the
+weights pile up in just a few magnitude bins out of the sixteen possible, and
+the entropy of the exponent stream lands at 2.79 bits per symbol, not the 4
+bits a uniform distribution would carry. So we break each FP8 down into two
+bits, and only compress the exponents. 
+
+```txt
+Qwen3-14B-FP8 weight distribution by log₂|w| bin (% of mass)
+
+                                              █              
+                                          ▄   █              
+                                          █   █   ▄          
+                                          █   █   █          
+                                      ▃   █   █   █          
+              ▁   ▂   ▃   ▄   ▆   █   █   █   █   █   ▂      
+-17 -16 -15 -14 -13 -12 -11 -10 -9  -8  -7  -6  -5  -4  -3  
+```
+
+There are a few sources of overhead. tANS has to store its table somewhere:
+for our 4096-entry decoder, 16 KiB of decode table loaded once from HBM into
+shared memory per kernel invocation. Each tANS-encoded stream has its own
+final state ($M$ in tANS parlance) that the decoder starts unwinding from,
+plus a few bytes of bookkeeping for the last machine word that didn't fill
+cleanly. And we need an index table giving the start offset of each stream
+in the packed buffer. Together this lands at roughly 7 bytes of metadata per
+stream. The result is that we hit a compression rate of about 7 bits per fp8.
+
+There's a parallelism-vs-compression tradeoff. Short streams give the GPU more
+parallel work but pay the metadata cost more often per byte; long streams
+compress better but offer fewer threads to keep busy. There are other penalties
+to long streams too when it comes to writing fast kernels -- for example, they
+increase warp divergence. For the 4090 we land around 1024 FP8 bytes per
+stream, about a million streams across a 1 GiB working set, which we find to be
+a balance short enough to keep the SMs saturated and long enough that the
+per-stream metadata doesn't dominate. To keep the decoder cheap at that stream
+count, the codec pair-codes the exponent stream: a single state transition
+emits two exponent symbols at once, halving the table-lookup work per output
+byte. The full encoder and decoder kernel are open source at
+[`doublewordai/rans-vectoradd`](https://github.com/doublewordai/rans-vectoradd).
+
+## The result
+
+Putting all the pieces together, we have a fused decode-and-vecadd kernel that
+runs on a 4090. The kernel does the same FP8 vector add as the raw baseline.
+The only thing that differs is that it reads the operands as tANS streams and
+decodes them inside the kernel before adding.
+
+On a 1 GiB working set, the raw baseline takes 3.57 ms and the fused kernel
+takes 3.24 ms. That's a **1.10× amplification**, or about 10% faster than the
+raw kernel.
+
+The measurement is consistent with the obvious model of what's happening. The
+raw vecadd reads two bytes per FP8 output and writes one, for three bytes of
+HBM traffic per output byte. The fused vecadd reads 6.95 bits per input FP8 and
+writes one byte, for 2.74 bytes of HBM traffic per output byte. The ratio of
+those two is 3 / 2.74 ≈ 1.10. The measured amplification matches the
+bandwidth-saving ratio to within measurement noise, which means the fused
+decoder is paying essentially zero overhead in HBM-time. Every byte the
+compression saves lands as a speedup.
+
+## Outlook
+
+Part of what makes this idea interesting is the broader shift it points at.
+Most of the work that has gone into making large models faster has come from
+exploiting structural properties of the problem: compute graph shape,
+arithmetic intensity, attention layout. The next step is to look past the
+structure and into the data itself[>5]. Decompressing weights inside a
+memory-bound kernel sits in this family: the win comes from a property of the
+weight values themselves, rather than from anything you could read off the
+shape of the model.
+
+[>5]: Interesting analogue from CPU optimization: modern CPUs have started
+shipping [data memory-dependent prefetchers](https://gofetch.fail/) that
+inspect loaded cache lines and speculatively dereference any value that looks
+like a pointer; the speedup depends on what the data actually contains. 
+
+Getting practical results on a 4090 an existence proof that these sorts of
+techniques can be useful. But, the road to using this stuff in a production kernel
+is steep. Strictly memory bound kernels are a small fraction of forward
+pass time. The meaningful place to land this kind of optimization is in low
+latency decode -- where smaller batch sizes & compute unfriendly architectures
+(specifically, MoEs) make it impossible to push into the compute-bound regime.
+
+How to go beyond consumer GPUs? Datacenter GPUs are a different shape:
+Hopper-class GPUs have memory bandwidth around 4 TB/s, four to five times
+faster than a 4090. The binding constraint are the ALUs. The INT32
+ops-per-cycle per SM
+[doubled](https://developer.nvidia.com/blog/nvidia-blackwell-and-nvidia-cuda-12-9-introduce-family-specific-architecture-features/)
+on Blackwell, over Ada, so there's some hope. There's no concrete theoretical
+reason why this ought to be impossible. But if our 1TB/s 4090 decoder was hard, getting up
+to Blackwell's 8 TB/s is a mountain to climb.
