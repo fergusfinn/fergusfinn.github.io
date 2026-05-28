@@ -7,15 +7,13 @@ if (typeof window !== 'undefined') {
   Chart.register(...registerables)
 }
 
-// All measured on the same RTX 4090, 1 GiB working set, FP8 elements except
-// CCCL which is FP32 (same access pattern; binary_transform doesn't take BF16).
+// All measured on the same RTX 4090, 1 GiB working set. torch.add is bf16
+// (torch.add doesn't dispatch on fp8); fused is fp8 logical throughput.
+// Same 2R + 1W access pattern in both cases.
 const DATA: { kernel: string; bandwidth: number; isResult: boolean }[] = [
-  { kernel: 'raw FP8 vecadd', bandwidth: 909, isResult: false },
-  { kernel: 'CCCL binary_transform', bandwidth: 927, isResult: false },
+  { kernel: 'torch.add (bf16)', bandwidth: 922, isResult: false },
   { kernel: 'fused tANS vecadd (logical FP8)', bandwidth: 993, isResult: true },
 ]
-
-const RATED_PEAK = 1008
 
 const ACCENT_HUE = 220
 
@@ -80,7 +78,7 @@ export default function KernelBandwidthBars() {
         scales: {
           x: {
             beginAtZero: true,
-            suggestedMax: 1080,
+            suggestedMax: 1050,
             title: {
               display: true,
               text: 'effective bandwidth (GB/s)',
@@ -103,35 +101,7 @@ export default function KernelBandwidthBars() {
           },
         },
       },
-      plugins: [
-        ChartDataLabels,
-        {
-          id: 'ratedPeakLine',
-          afterDatasetsDraw(chart) {
-            const { ctx, chartArea, scales } = chart
-            const x = scales.x.getPixelForValue(RATED_PEAK)
-            if (x < chartArea.left || x > chartArea.right) return
-            ctx.save()
-            ctx.strokeStyle = theme.mutedForeground
-            ctx.setLineDash([4, 4])
-            ctx.lineWidth = 1
-            ctx.beginPath()
-            ctx.moveTo(x, chartArea.top)
-            ctx.lineTo(x, chartArea.bottom)
-            ctx.stroke()
-            ctx.fillStyle = theme.mutedForeground
-            ctx.font = `11px ${theme.fontFamily}`
-            ctx.textAlign = 'right'
-            ctx.textBaseline = 'top'
-            ctx.fillText(
-              `rated HBM peak (${RATED_PEAK} GB/s)`,
-              x - 4,
-              chartArea.top - 18,
-            )
-            ctx.restore()
-          },
-        },
-      ],
+      plugins: [ChartDataLabels],
     })
 
     return () => {
@@ -141,7 +111,7 @@ export default function KernelBandwidthBars() {
   }, [theme])
 
   return (
-    <div class="my-6" style="position: relative; height: 260px; width: 100%;">
+    <div class="my-6" style="position: relative; height: 200px; width: 100%;">
       <canvas ref={chartRef} />
     </div>
   )
