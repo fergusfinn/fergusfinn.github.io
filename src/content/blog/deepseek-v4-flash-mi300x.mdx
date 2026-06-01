@@ -79,10 +79,10 @@ bias by one, so the same byte read as the wrong dialect comes back off
 by exactly a factor of two. MI300X is the only major accelerator where
 that distinction matters in practice[>6].
 
-[>6]: Throughout, we'll note the relevant commits from demo PRs against our public vLLM fork. [`1109b6c76`](https://github.com/doublewordai/vllm/commit/1109b6c76) makes the
+[>6]: Throughout, we'll note the relevant commits from the demo PRs in a public vLLM repo we put up for this post. [`236de4e64`](https://github.com/doublewordai/vllm-amd-blog-doubleword/commit/236de4e64) makes the
 DeepSeek v4 compressor and fused compress / quant / cache writes use the
 platform FP8 dtype so scales and cache bytes agree, and
-[`541d734af`](https://github.com/doublewordai/vllm/commit/541d734af) routes the
+[`bd06e5d87`](https://github.com/doublewordai/vllm-amd-blog-doubleword/commit/bd06e5d87) routes the
 sliding-window K-cache through a fnuz-aware fused quantise-and-insert helper.
 
 ## Missing attention fast paths
@@ -115,7 +115,7 @@ fall here. The fix is to refuse to dispatch into them when
 `current_platform` reports gfx942 and let the Triton fallback handle
 the call instead[>7].
 
-[>7]: See [`88565ddfa`](https://github.com/doublewordai/vllm/commit/88565ddfa): paged MQA and sparse MLA fallbacks, AITER guards on gfx942, and correctness coverage.
+[>7]: See [`cb8a18556`](https://github.com/doublewordai/vllm-amd-blog-doubleword/commit/cb8a18556): paged MQA and sparse MLA fallbacks, AITER guards on gfx942, and correctness coverage.
 
 ## HIP graphs
 
@@ -137,7 +137,7 @@ launches that take device pointers and sizes; they don't allocate
 ragged scratch from Python and they don't read host scalars mid-stream.
 It's pretty easy to write a Triton kernel that doesn't work nicely, we did that a couple times[>8]. 
 
-[>8]: [`7472ce776`](https://github.com/doublewordai/vllm/commit/7472ce776) rebuilds the sparse MLA decode metadata as static, capture-safe tensors: no dynamic ragged allocations, no host-to-device scalar writes under capture.
+[>8]: [`22cc02230`](https://github.com/doublewordai/vllm-amd-blog-doubleword/commit/22cc02230) rebuilds the sparse MLA decode metadata as static, capture-safe tensors: no dynamic ragged allocations, no host-to-device scalar writes under capture.
 
 ## Loose ends
 
@@ -148,11 +148,11 @@ We ran into a bunch of smaller issues:
   be called was actually AITER's. With AITER globally on but MXFP4
   falling through to the emulation backend, the kernel got the wrong
   mask and tokens routed to the wrong experts.
-  [`e4b3d674b`](https://github.com/doublewordai/vllm/commit/e4b3d674b).
+  [`8b5f7aa2c`](https://github.com/doublewordai/vllm-amd-blog-doubleword/commit/8b5f7aa2c).
 - A Triton kernel that masks padded lanes against the global tensor
   bound rather than the logical block size. At high concurrency the
   padded lanes scribbled across the MoE routing bitmatrix.
-  [`cb0b15ebf`](https://github.com/doublewordai/vllm/commit/cb0b15ebf).
+  [`c32932bb9`](https://github.com/doublewordai/vllm-amd-blog-doubleword/commit/c32932bb9).
 
 ## Tuning it up
 
@@ -170,7 +170,7 @@ writes to a scratch tensor and then copies into the caller's output buffer. The
 bf16 projection weight gets materialised every decode step instead of cached.
 One static Triton launch shape covers both the small-batch ramp and saturated
 serving. The MXFP4 OGS tile shape is similarly a single static choice across
-regimes that don't look anything alike. [`doublewordai/vllm#16`](https://github.com/doublewordai/vllm/pull/16). 
+regimes that don't look anything alike. [`doublewordai/vllm-amd-blog-doubleword#2`](https://github.com/doublewordai/vllm-amd-blog-doubleword/pull/2). 
 
 On our simple benchmark that takes the box from 2485 to 2699 output tok/s per
 GPU, about +8.6%. 
@@ -202,6 +202,6 @@ this kind of work[>10] has dropped through the floor with the rise of agentic co
 a result of both factors, if you send your DeepSeek-V4-Flash requests to the
 [Doubleword API](https://app.doubleword.ai), the response might be AMD-powered.
 
-[>10]: All of the fixes in this post live as demo PRs against our public
-[vLLM fork](https://github.com/doublewordai/vllm); the commits are linked
+[>10]: All of the fixes in this post live as demo PRs in a public
+[vLLM repo](https://github.com/doublewordai/vllm-amd-blog-doubleword) we put up to accompany it; the commits are linked
 inline throughout. We intend to upstream the parts that make sense for everyone.
