@@ -10,6 +10,7 @@ const blog = defineCollection({
     index: z.boolean().default(true),
     showConfigSidebar: z.boolean().optional(),
     stickyToc: z.boolean().optional(),
+    coverCredit: z.string().optional(),
   }),
 })
 

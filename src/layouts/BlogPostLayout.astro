@@ -26,6 +26,7 @@ const {
 	slug,
 	filePath,
 	remarkPluginFrontmatter,
+	coverCredit,
 	showConfigSidebar = false,
 	stickyToc = false,
 } = Astro.props
@@ -37,6 +38,19 @@ import ConfigTable from '../components/inference/ConfigTable.tsx'
 const lastModified = dayjs(remarkPluginFrontmatter.lastModified)
 	.utc()
 	.format('D MMM YYYY')
+
+// Render the limited markdown used in coverCredit (links + emphasis) to HTML.
+function renderCredit(md?: string) {
+	if (!md) return ''
+	let s = md.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+	s = s.replace(
+		/\[([^\]]+)\]\(([^)]+)\)/g,
+		(_m, t, u) =>
+			`<a href="${u}" target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:opacity-100">${t}</a>`
+	)
+	s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>')
+	return s
+}
 ---
 
 <BaseLayout title={title} description={description}>
@@ -68,37 +82,37 @@ const lastModified = dayjs(remarkPluginFrontmatter.lastModified)
 						>
 							{title}
 						</h1>
-						<div class="text-lg flex items-center gap-4 flex-wrap py-4">
+						<div class="text-sm opacity-70 flex items-center gap-2 flex-wrap py-4">
 							<!-- Publish date -->
-							<span>
-								<Icon
-									name="mdi:calendar-month-outline"
-									class="inline-block text-primary dark:text-primary-dark"
-								/>
-								<FormattedDate date={pubDate} />
-							</span>
+							<FormattedDate date={pubDate} />
 
 							<!-- Updated date -->
 							{
 								updatedDate && (
-									<span>
-										<Icon
-											name="mdi:calendar-refresh-outline"
-											class="inline-block text-primary dark:text-primary-dark"
-										/>
-										Last updated on <FormattedDate date={updatedDate} />
-									</span>
+									<Fragment>
+										<span>·</span>
+										<span>
+											Last updated <FormattedDate date={updatedDate} />
+										</span>
+									</Fragment>
 								)
 							}
 
 							<!-- Read time -->
-							<span>
-								<Icon
-									name="mdi:clock-time-four-outline"
-									class="inline-block text-primary dark:text-primary-dark"
-								/>
-								{remarkPluginFrontmatter.minutesRead}
-							</span>
+							<span>·</span>
+							<span>{remarkPluginFrontmatter.minutesRead}</span>
+
+							<!-- Cover credit -->
+							{
+								coverCredit && (
+									<Fragment>
+										<span>·</span>
+										<span>
+											Cover: <Fragment set:html={renderCredit(coverCredit)} />
+										</span>
+									</Fragment>
+								)
+							}
 						</div>
 					</div>
 					<div

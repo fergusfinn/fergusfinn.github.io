@@ -3,6 +3,7 @@ title: 'Large-Scale Semantic Search Without Embeddings'
 description: |
   Applying parallel primitives to search and rank 2.4 million arXiv papers using LLM judgments
 pubDate: 'Jan 2026'
+coverCredit: 'Locomotive salvaged after the Tay Bridge disaster (1879), via [The Public Domain Review](https://publicdomainreview.org/essay/the-forth-bridge-building-an-icon/).'
 ---
 
 What would we do differently if LLM inference got 100x cheaper?

@@ -3,6 +3,7 @@ title: 'LLM powered data structures: A concurrent, lock-free binary search tree'
 description: |
   A lock-free binary search tree optimized for expensive async comparisons, with threaded linked list for O(1) sorted iteration
 pubDate: '13 Jan 2026'
+coverCredit: 'Jacoba van Heemskerck, [*Tree*](https://commons.wikimedia.org/wiki/File:Jacoba_van_Heemskerck_van_Beest,_Tree,_c._1915,_NGA_153657.jpg) (woodcut, c. 1915).'
 ---
 
 <!--

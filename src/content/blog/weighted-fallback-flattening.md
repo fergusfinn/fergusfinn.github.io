@@ -4,6 +4,7 @@ description: |
   When a weighted-random fallback rejects samples and retries without replacement, high error rates cause low-weight models to be selected far more often than their weights suggest.
 pubDate: 'Feb 17 2026'
 slug: weighted-fallback-flattening
+coverCredit: 'William Playfair, [*Chart of all the Imports and Exports to and from England, 1700–1782*](https://commons.wikimedia.org/wiki/File:1786_Playfair_-_1_Chart_of_all_the_import_and_exports_to_and_from_England_from_the_year_1700_to_1782.jpg), from *The Commercial and Political Atlas* (1786).'
 ---
 
 AI inference gateways often route requests across multiple upstream providers. When one of them returns a 502 or a 429, it's common to retry the request against a different provider rather than propagate the error[>0]. In the [Doubleword Control Layer](https://github.com/doublewordai/control-layer) we support two fallback strategies.

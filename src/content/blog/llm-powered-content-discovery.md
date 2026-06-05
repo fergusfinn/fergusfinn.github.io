@@ -3,6 +3,7 @@ title: 'Scaling Curation with LLM Comparisons'
 description: |
   Building a content discovery system using parallel primitives and BST-based ranking with LLM comparisons
 pubDate: '16 Jan 2026'
+coverCredit: 'Alma Thomas, [*Pansies in Washington*](https://www.nga.gov/artworks/195519-pansies-washington).'
 ---
 
 <!--

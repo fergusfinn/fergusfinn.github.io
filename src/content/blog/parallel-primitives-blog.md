@@ -3,6 +3,7 @@ title: 'Parallel Primitives for Multi-Agent Workflows'
 description: |
   Exploring coordination patterns from parallel computing for multi-agent LLM systems
 pubDate: 'Dec 31 2025'
+coverCredit: 'Paul Signac, [*Bateaux sur la Seine*](https://collections.vam.ac.uk/item/O1037127/bateaux-sur-la-seine-print-signac/) (etching, early 20th century), via the V&A.'
 ---
 
 ## The Multi-Agent Coordination Problem
