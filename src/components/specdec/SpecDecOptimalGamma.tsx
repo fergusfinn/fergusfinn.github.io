@@ -207,7 +207,26 @@ export default function SpecDecOptimalGamma() {
       chartInstance.current?.destroy()
       chartInstance.current = null
     }
-  }, [theme, seqLen, alpha, alphaPct, cDraft, cDraftPct])
+  }, [theme])
+
+  // Update data in place when the sliders move, so the line morphs instead of
+  // replaying its mount animation from zero on every change.
+  useEffect(() => {
+    const chart = chartInstance.current
+    if (!chart) return
+    const gammaPts: Point[] = []
+    let gMax = 2
+    for (let i = 0; i <= 300; i++) {
+      const B = Math.pow(10, (i / 300) * Math.log10(30000))
+      const { gamma } = bestGamma(alpha, B, seqLen, cDraft)
+      gammaPts.push({ x: B, y: gamma })
+      if (gamma > gMax) gMax = gamma
+    }
+    chart.data.datasets[0].data = gammaPts
+    const yGamma = chart.options.scales?.yGamma as { max?: number } | undefined
+    if (yGamma) yGamma.max = gMax + 2
+    chart.update('none')
+  }, [seqLen, alpha, cDraft])
 
   const row = 'display: flex; align-items: center; gap: 0.6rem; font-size: 0.85rem;'
   return (

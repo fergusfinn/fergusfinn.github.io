@@ -270,6 +270,9 @@ export default function SpecDecLedger() {
   const seqLen = Math.round(512 * Math.pow(2, (sliderPos / 100) * 8))
   const cDraft = cDraftPct / 100
 
+  // Create (and rebuild only on theme / component-toggle, which change colours
+  // and the dataset set). Slider changes are handled by the in-place update
+  // below, so the curves morph instead of replaying the mount animation from zero.
   useEffect(() => {
     if (!costRef.current) return
     applyChartDefaults(theme)
@@ -287,7 +290,18 @@ export default function SpecDecLedger() {
       costChart.current?.destroy()
       costChart.current = null
     }
-  }, [theme, seqLen, cDraft, cDraftPct, showComponents])
+  }, [theme, showComponents])
+
+  // Update data in place when the sliders move: no destroy, so no from-zero replay.
+  useEffect(() => {
+    const chart = costChart.current
+    if (!chart) return
+    const next = datasets(computeCurves(seqLen, cDraft), theme, showComponents)
+    next.forEach((ds, i) => {
+      if (chart.data.datasets[i]) chart.data.datasets[i].data = ds.data
+    })
+    chart.update('none')
+  }, [seqLen, cDraft])
 
   const sliderRow = 'display: flex; align-items: center; gap: 0.6rem; font-size: 0.85rem;'
   return (
