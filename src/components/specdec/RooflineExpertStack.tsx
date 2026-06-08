@@ -18,6 +18,7 @@ const B_FP4 = 0.53 // bytes/elem for MXFP4 (4-bit + 8-bit scale per 32-block)
 const AI = 2 / B_FP4 // FLOP/byte added per token by an fp4 GEMM (~3.77)
 const E = 256
 const K = 6
+const SHARED = 1
 
 function eAct(n: number): number {
   // Exact distinct-top-k coupon: each token picks k distinct experts of E.
@@ -25,11 +26,11 @@ function eAct(n: number): number {
 }
 
 const denseAI = (n: number) => Math.min(AI * n, R)
-const moeAI = (n: number) => Math.min((AI * n * K) / eAct(n), R)
+const moeAI = (n: number) => Math.min((AI * n * (K + SHARED)) / (eAct(n) + SHARED), R)
 
 const DENSE_KNEE = R / AI // ~298 tokens, dense FFN hits R
-const MOE_SAT_KNEE = (DENSE_KNEE * E) / K // ~12,700 tokens, MoE hits R once experts saturate
-const BMAX = 13000
+const MOE_SAT_KNEE = (DENSE_KNEE * (E + SHARED)) / (K + SHARED) // ~10,950 tokens, MoE hits R once experts saturate
+const BMAX = 11000
 
 // log sweep plus the exact roofline corners so the apexes render crisply
 const N_GRID: number[] = []
@@ -51,7 +52,9 @@ export default function RooflineExpertStack() {
   const theme = useChartTheme()
 
   useEffect(() => {
-    if (!chartRef.current) return
+    if (!chartRef.current) {
+      return
+    }
     chartInstance.current?.destroy()
     applyChartDefaults(theme)
 
@@ -87,7 +90,7 @@ export default function RooflineExpertStack() {
           { label: '', data: MOE_FREE, borderColor: 'transparent', backgroundColor: moeFill, fill: 'start', pointRadius: 0, pointHoverRadius: 0, borderWidth: 0, tension: 0.1 },
           { label: '', data: DENSE_FREE, borderColor: 'transparent', backgroundColor: denseFill, fill: 'start', pointRadius: 0, pointHoverRadius: 0, borderWidth: 0, tension: 0.1 },
           lineDS('dense FFN (same params)', DENSE, denseColor),
-          lineDS('MoE FFN (6 of 256)', MOE, moeColor),
+          lineDS('MoE FFN (6 routed + shared)', MOE, moeColor),
         ],
       },
       options: {
