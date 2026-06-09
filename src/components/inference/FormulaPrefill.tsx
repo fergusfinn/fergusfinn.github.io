@@ -4,7 +4,6 @@ import {
   modelStore,
   totalCompute,
   prefillTime,
-  prefillFLOPs,
   attentionFLOPs,
 } from '../../stores/inferenceStore'
 
@@ -13,7 +12,6 @@ export default function FormulaPrefill() {
   const model = useStore(modelStore)
   const compute = useStore(totalCompute)
   const time = useStore(prefillTime)
-  const flops = useStore(prefillFLOPs)
   const attention = useStore(attentionFLOPs)
 
   const ISL = config.inputSeqLength

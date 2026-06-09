@@ -3,7 +3,6 @@ import {
   configStore,
   modelStore,
   totalMemoryBandwidth,
-  totalBytesPerDecode,
   decodeTime,
   kvCachePerSequence,
 } from '../../stores/inferenceStore'
@@ -12,13 +11,11 @@ export default function FormulaDecode() {
   const config = useStore(configStore)
   const model = useStore(modelStore)
   const bandwidth = useStore(totalMemoryBandwidth)
-  const totalBytes = useStore(totalBytesPerDecode)
   const time = useStore(decodeTime)
   const kvCache = useStore(kvCachePerSequence)
 
   const weightsGB = (model.modelSize * 1e9 * config.bytesPerParameter / 1e9).toFixed(1)
   const kvTotalGB = (config.concurrentUsers * kvCache / 1e9).toFixed(1)
-  const totalGB = (totalBytes / 1e9).toFixed(1)
   const bandwidthTBs = (bandwidth / 1e12).toFixed(1)
 
   return (

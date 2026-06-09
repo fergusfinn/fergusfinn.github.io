@@ -18,6 +18,11 @@ import rehypeAutolinkHeadings from 'rehype-autolink-headings'
 // https://astro.build/config
 export default defineConfig({
   site: 'https://fergusfinn.com',
+  // Top-level server config is what `astro preview`'s static server reads for
+  // its host allowlist (see core/preview/static-preview-server.js).
+  server: {
+    allowedHosts: ['gotenks'],
+  },
   integrations: [
     mdx(),
     sitemap(),

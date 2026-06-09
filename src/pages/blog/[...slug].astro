@@ -4,7 +4,11 @@ import BlogPostLayout from '../../layouts/BlogPostLayout.astro'
 import type { MarkdownHeading } from 'astro'
 
 export async function getStaticPaths() {
-	const posts = await getCollection('blog')
+	// Drafts are only built during `astro dev`; production builds exclude them
+	// from the bundle entirely.
+	const posts = (await getCollection('blog')).filter(
+		(post) => import.meta.env.DEV || !post.data.draft
+	)
 	const headings = await Promise.all(
 		posts.map(async (post) => {
 			const data = await post.render()

@@ -4,7 +4,7 @@ import FormattedDate from './FormattedDate.astro'
 import type { ImageMetadata } from 'astro'
 import { Image } from 'astro:assets'
 
-const { post } = Astro.props
+const { post, priority = false } = Astro.props
 
 const blogImages = import.meta.glob<{ default: ImageMetadata }>(
 	'/src/assets/blogimages/**/*.{jpeg,jpg,png,gif}'
@@ -22,6 +22,10 @@ const coverImagePath = `/src/assets/blogimages/${post.slug}/cover.jpg`
 			<Image
 				src={blogImages[coverImagePath]()}
 				alt={post.data.title}
+				widths={[280, 400, 560, 800]}
+				sizes="(min-width: 1280px) 23vw, (min-width: 768px) 45vw, 90vw"
+				loading={priority ? 'eager' : 'lazy'}
+				fetchpriority={priority ? 'high' : 'auto'}
 				class="object-cover rounded-xl aspect-video"
 			/>
 		)

@@ -2,22 +2,47 @@
 import { getCollection } from 'astro:content'
 import BlogCard from '../components/BlogCard.astro'
 import BaseLayout from '../layouts/BaseLayout.astro'
+import sourceSans3Latin from '@fontsource/source-sans-3/files/source-sans-3-latin-400-normal.woff2?url'
 
-const posts = (await getCollection('blog', ({ data }) => data.index !== false)).sort(
-	(a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf()
-)
+const posts = (
+	await getCollection('blog', ({ data }) => data.index !== false && !data.draft)
+).sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf())
+
+// Drafts get their own row, visible only while running `astro dev`. They are
+// never built into production, so this list is empty in a real build.
+const drafts = import.meta.env.DEV
+	? (await getCollection('blog', ({ data }) => data.draft === true)).sort(
+			(a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf()
+		)
+	: []
 ---
 
 <BaseLayout>
+	<!-- Preload UI font at low priority: fixes FOUT on fast links, yields to the high-priority LCP cover image on slow links -->
+	<link slot="head" rel="preload" href={sourceSans3Latin} as="font" type="font/woff2" crossorigin fetchpriority="low" />
 	<main class="app-container lg:!px-16 xl:!px-24 2xl:!px-32 pt-36">
 		<h1 class="text-6xl pb-8 font-bold">Blog</h1>
 	</main>
+	{
+		drafts.length > 0 && (
+			<section class="app-container lg:!px-16 xl:!px-24 2xl:!px-32 pt-16">
+				<h2 class="text-3xl pb-8 font-bold">Drafts</h2>
+				<ul class="posts-grid-container">
+					{drafts.map((post) => (
+						<li>
+							<BlogCard post={post} />
+						</li>
+					))}
+				</ul>
+			</section>
+		)
+	}
 	<section class="app-container lg:!px-16 xl:!px-24 2xl:!px-32 py-16 mb-8">
 		<ul class="posts-grid-container">
 			{
-				posts.map((post) => (
+				posts.map((post, i) => (
 					<li>
-						<BlogCard post={post} />
+						<BlogCard post={post} priority={i === 0} />
 					</li>
 				))
 			}

@@ -1,0 +1,181 @@
+---
+title: 'Profile-guided adaptive speculation'
+description: |
+  If the cost of a speculated token moves with load, context, and acceptance,
+  then the draft length should too. Picking it dynamically, from a cost model
+  and the drafter's own logprobs.
+pubDate: 'Jun 5 2026'
+stickyToc: true
+draft: true
+---
+
+{/*
+STATUS: Stub. Spun out of "The mathematics of speculative decoding", which
+builds the per-token cost model and the optimal-γ argument this post depends on.
+
+OUTLINE:
+- [x] Framing: the cost model isn't static, so γ shouldn't be either
+- [x] What varies and why (B, α, S over time)
+- [x] The adaptive γ selector
+- [x] inference-lab simulator setup + results (disagg oracle-match table)
+- [ ] Conclusion
+*/}
+
+The companion post, [the economics of speculative
+decoding](https://fergusfinn.com/blog/economics-of-speculative-decoding/),
+works out what a single speculated token actually costs to produce and verify
+on a modern MoE + compressed-attention model, and the optimal draft length
+$\gamma^\star$ that falls out of it. That analysis assumed a static operating
+point. Real deployments don't have one. This post is about what to do when the
+cost model moves underneath you.
+
+## How much does this cost us in real deployments?
+
+Failing to grok the cost model of real speculative decoding costs us a few different things:
+
+1. When setting up a deployment with a consistent load pattern, the
+   practitioner runs a set of benchmarks with that load pattern, then picks a
+   $\gamma^\star$ that optimizes whatever combination of figures of merit
+   (goodput, throughput, latency, etc.) they seek. This process is slow,
+   frustrating, and combinatorial (we're already tuning many other parameters
+   of the engine, can we really tune spec. dec independently?). Apart from
+   anything else, its possible to get either the estimation of the load on the
+   system, or the benchmarking process, wrong.
+
+2. Real load & acceptance are not static. $B$ (the batch size), $\alpha$, are a
+   function of time: $B$ because of varying user load on the system, and also
+   because of the dependence of $B$ on $S_i$, the sequence lengths in the batch
+   ($1000$ short sequences fit, $10$ long sequences). $\alpha$ depends on time
+   because of shifting data distributions. The sequence length $S$ varies over
+   time with the same factors, and is also heterogeneous across the batch.
+
+3. The main dynamically varying cost we've illustrated here is the cost of
+   verifying tokens that we might then reject. Given a model of the likelihood of
+   rejection, we might choose to set $\gamma$ dynamically. We have one, for
+   free from the log probs of the speculator.
+
+4. If we know that we're in a region where speculation doesn't pay, we don't
+   have to run the speculator layers at all.
+
+
+Really, $\gamma$ should be some continuous, stateful estimated pick, based on
+the cost model from the companion post. 
+
+We setup a simulator of real LLM inference at
+[inference-lab](https://github.com/doublewordai/inference-lab) for the purpose
+of evaluating just this kind of question.
+
+## The simulator
+
+The simulator runs a discrete-event simulation of an inference engine (its
+based on vLLM, but the scheduler logic isn't that different to sglang). The
+simulator generates requests based on an input distribution (poisson, closed
+loop, user provided, etc.), an input token distribution (lognormal, constant,
+user provided), and an output token distribution (lognormal, constant, user
+provided). The simulator receives them, composes batches, then calculates the
+simulated step time, and adds that to the counter. We can figure out how long
+it will take an inference engine to get through a set of requests on perfect
+hardware, and use it as a test bench for new ideas about scheduling,
+speculative decoding etc.
+
+Its setup to model all of the properties described in the companion post: proper
+MoE, MLA, and the varying cost of speculative decoding.
+
+## How to do adaptive speculation
+
+The adaptive $\gamma$ selector works as follows: we take the model of the cost
+of speculating from the companion post and run it on the decode-only sequences
+for the next iteration. Concretely, at the end of each scheduler step, the
+instant before the drafter runs, we already have the decode batch in hand: how
+many sequences it holds and how long their contexts are. For every candidate
+draft length $G$, from $0$ (don't speculate at all) up to a cap, we price a
+verify of width $1 + G$ over that batch through the cost model and take the $G$
+that maximises goodput, the expected committed tokens per unit cost,
+
+$$
+G^\star = \arg\max_G \; \frac{\mathbb{E}[\text{accepted} \mid G] + 1}{C(B, 1 + G, S)}.
+$$
+
+The other input it needs is the acceptance rate $\alpha$. In the runs here I
+hold that fixed at a representative value, because load is the part that moves
+fastest and I want to isolate it. A real deployment would just track acceptance
+empirically, as a running average of how many drafted tokens actually survived
+verification over recent steps, and feed that to the selector[>1]. What the
+selector does not need is an offline $\gamma$ sweep: given $\alpha$, the draft
+length falls out of the batch it is about to run.
+
+[>1]: Verification already tells you, for free, exactly how many of the proposed
+tokens were accepted each step, so the acceptance rate is something you measure
+rather than predict. Holding it fixed here is a simplification to isolate the
+load dependence, not a claim that it is constant in practice.
+
+## Does the selector find the best $\gamma$?
+
+The thing to check is whether this per-step pick actually lands on the draft
+length you would have chosen with perfect foresight. So we sweep offered load
+and, at each point, compare the selector against every fixed $\gamma$ from $1$
+to $8$ as well as not speculating at all. The best of those fixed choices is an
+oracle: the most throughput a single, perfectly-tuned draft length could give
+you at that load. The question is how close the selector gets without being
+told that length in advance.
+
+To make the comparison clean we disaggregate prefill, putting it on its own
+pool of workers with one decode worker running speculation, so the decode pool
+runs pure decode and the per-step decode objective the selector optimises is
+the whole story[>2]. The model is DeepSeek-V4-Flash on a B200, long context
+(input $3840$, output $512$), acceptance $0.75$. Goodput is committed tokens
+per second.
+
+[>2]: Colocated, on a single pool, this is muddier: a deep verify competes with
+the prefill sharing the GPU, and the decode-only cost model misses that
+competition, so it over-speculates by a few percent at large batch when the
+input is much longer than the output. Disaggregation removes the confound,
+which is the regime at scale anyway.
+
+| load | decode batch | no-spec | best fixed $\gamma$ | adaptive | gap |
+|---:|---:|---:|:---|---:|---:|
+| 1 | 1 | 811 | 959 (g1) | 959 | +0.0% |
+| 8 | 8 | 2,117 | 2,117 (none) | 2,120 | +0.1% |
+| 16 | 16 | 2,576 | 2,576 (none) | 2,573 | −0.1% |
+| 32 | 32 | 3,219 | 3,891 (g4) | 3,890 | −0.0% |
+| 64 | 64 | 4,564 | 7,551 (g4) | 7,568 | +0.2% |
+| 128 | 128 | 7,957 | 14,758 (g4) | 14,684 | −0.5% |
+| 256 | 255 | 15,038 | 27,207 (g3) | 27,110 | −0.4% |
+| 512 | 373 | 20,357 | 36,409 (g3) | 36,462 | +0.1% |
+| 1,024 | 373 | 19,747 | 35,841 (g3) | 35,841 | −0.0% |
+| 2,048 | 373 | 19,747 | 35,900 (g3) | 35,874 | −0.1% |
+| 4,096 | 373 | 19,747 | 35,947 (g3) | 35,940 | −0.0% |
+
+The selector sits on the oracle across the whole range, never more than half a
+percent off, and it gets there reading nothing but the previous step's decode
+batch.
+
+## A smaller model, for reference
+
+The same economics on a model you might actually run on one GPU:
+Qwen3.5-35B-A3B, a 35B-total / 3B-active hybrid that interleaves GatedDeltaNet
+linear-attention layers with full GQA attention under an MoE on every layer, on
+a single B200 at $1024$ input / $1024$ output, acceptance $0.75$. The table is
+output tokens per second by fixed draft length against the adaptive selector,
+swept over closed-loop concurrency. Two things to notice: at near-unit batch the
+optimal draft length collapses, because a small speculation bundle stays under
+the MoE coupon knee and each speculated token drags in fresh experts (deep
+speculation is taxed, and $\gamma = 8$ loses outright); as the batch grows the
+bundle clears the knee, the experts amortise, and $\gamma^\star$ climbs back to
+the cap before drifting down again once the GEMMs approach their roofline.
+
+| concurrency | no-spec | $\gamma{=}1$ | $\gamma{=}2$ | $\gamma{=}4$ | $\gamma{=}8$ | adaptive | best fixed |
+|---:|---:|---:|---:|---:|---:|---:|:--|
+| 1 | 1,374 | 1,795 | 1,908 | 1,835 | 1,493 | 1,908 | g2 |
+| 2 | 2,032 | 2,404 | 2,441 | 2,270 | 1,851 | 2,441 | g2 |
+| 4 | 2,716 | 3,006 | 3,006 | 2,830 | 2,459 | 3,010 | g1 |
+| 8 | 3,410 | 3,706 | 3,802 | 3,832 | 3,773 | 3,819 | g4 |
+| 16 | 4,198 | 4,840 | 5,322 | 6,040 | 6,832 | 6,834 | g8 |
+| 64 | 7,830 | 12,317 | 16,004 | 20,982 | 25,353 | 25,371 | g8 |
+| 128 | 12,989 | 22,539 | 29,688 | 38,933 | 46,581 | 46,634 | g8 |
+| 256 | 22,585 | 38,905 | 50,647 | 65,043 | 75,265 | 75,365 | g8 |
+| 512 | 36,671 | 60,802 | 76,902 | 94,802 | 103,882 | 103,969 | g8 |
+| 1,024 | 46,533 | 75,509 | 93,903 | 112,366 | 105,709 | 118,762 | g5 |
+| 2,048 | 61,794 | 95,879 | 115,217 | 131,467 | 105,330 | 130,747 | g4 |
+
+## Conclusion

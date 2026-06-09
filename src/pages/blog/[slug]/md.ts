@@ -2,7 +2,10 @@ import type { APIRoute, GetStaticPaths } from 'astro'
 import { getCollection } from 'astro:content'
 
 export const getStaticPaths: GetStaticPaths = async () => {
-  const posts = await getCollection('blog')
+  // Drafts are only built during `astro dev`; production builds exclude them.
+  const posts = (await getCollection('blog')).filter(
+    (post) => import.meta.env.DEV || !post.data.draft,
+  )
   return posts.map((post) => ({
     params: { slug: post.slug },
     props: { post },

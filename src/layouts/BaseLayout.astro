@@ -15,7 +15,6 @@ import '@fontsource/source-sans-3'
 import '@fontsource-variable/jetbrains-mono'
 import '@fontsource/crimson-pro'
 import '@fontsource/noto-sans-math'
-import 'katex/dist/katex.min.css'
 ---
 
 <!doctype html>
@@ -25,6 +24,7 @@ import 'katex/dist/katex.min.css'
 			title={title || SITE_TITLE}
 			description={description || SITE_DESCRIPTION}
 		/>
+		<slot name="head" />
 	</head>
 	<body
 		class="text-foreground bg-background font-light dark:text-foreground-dark dark:bg-background-dark transition-colors min-h-screen flex flex-col"

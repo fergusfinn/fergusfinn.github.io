@@ -3,8 +3,10 @@ import { getCollection } from 'astro:content'
 
 export async function GET(context) {
   const blog = await getCollection('blog')
-  // Filter out posts that shouldn't be indexed
-  const indexedPosts = blog.filter((post) => post.data.index !== false)
+  // Filter out posts that shouldn't be indexed, and drafts (never in the feed)
+  const indexedPosts = blog.filter(
+    (post) => post.data.index !== false && !post.data.draft,
+  )
   return rss({
     // `<title>` field in output xml
     title: 'Fergus\'s blog',

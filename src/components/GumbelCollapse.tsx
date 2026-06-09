@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { Chart, registerables } from 'chart.js'
-import { models, ALL_FORMATS, type Model } from '../data/weight-entropy-models'
+import { models, ALL_FORMATS } from '../data/weight-entropy-models'
 import { useChartTheme, applyChartDefaults, type ChartTheme } from './chartTheme'
 
 if (typeof window !== 'undefined') {
@@ -87,7 +87,7 @@ export default function GumbelCollapse({
           legend: { display: false },
           tooltip: {
             callbacks: {
-              label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}% at z=${ctx.parsed.x.toFixed(2)}`,
+              label: (ctx) => `${ctx.dataset.label}: ${(ctx.parsed.y ?? 0).toFixed(2)}% at z=${(ctx.parsed.x ?? 0).toFixed(2)}`,
             },
           },
         },

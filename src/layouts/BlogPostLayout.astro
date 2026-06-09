@@ -23,7 +23,6 @@ const {
 	pubDate,
 	updatedDate,
 	headings,
-	slug,
 	filePath,
 	remarkPluginFrontmatter,
 	coverCredit,
@@ -32,6 +31,9 @@ const {
 } = Astro.props
 
 import BaseLayout from './BaseLayout.astro'
+import 'katex/dist/katex.min.css'
+import crimsonProLatin from '@fontsource/crimson-pro/files/crimson-pro-latin-400-normal.woff2?url'
+import sourceSans3Latin from '@fontsource/source-sans-3/files/source-sans-3-latin-400-normal.woff2?url'
 import { Icon } from 'astro-icon/components'
 import ConfigTable from '../components/inference/ConfigTable.tsx'
 
@@ -54,6 +56,8 @@ function renderCredit(md?: string) {
 ---
 
 <BaseLayout title={title} description={description}>
+	<link slot="head" rel="preload" href={sourceSans3Latin} as="font" type="font/woff2" crossorigin />
+	<link slot="head" rel="preload" href={crimsonProLatin} as="font" type="font/woff2" crossorigin />
 	<main>
 		<article>
 			<div

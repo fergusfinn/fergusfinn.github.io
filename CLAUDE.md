@@ -35,8 +35,22 @@ pubDate: 'Jan 13 2026'
 index: true              # optional, default true (show in blog index)
 showConfigSidebar: true  # optional (show config sidebar)
 stickyToc: true          # optional (sticky table of contents)
+draft: true              # optional, default false (see Drafts below)
 ---
 ```
+
+### Drafts
+
+Set `draft: true` in a post's frontmatter to mark it unpublished. Drafts are:
+
+- **Excluded from production builds entirely** — no page, no `/md` endpoint, and
+  no entry in the index, sitemap, or RSS feed. They never reach `dist/`.
+- **Visible only under `astro dev`** — they appear in a separate "Drafts" row on
+  the blog index and their pages are reachable by URL for previewing.
+
+The mechanism keys off `import.meta.env.DEV`, so a draft is simply invisible in
+any real build. This replaces deleting/stashing work-in-progress posts: keep
+them in `src/content/blog/` with `draft: true` and flip the flag to publish.
 
 ### Cover Images
 

@@ -3,7 +3,7 @@ title: 'Anatomy of a high performance EP kernel'
 description: |
   A walk through of the anatomy of an expert-parallel dispatch and combine kernel.
 pubDate: 'Jun 05 2026'
-index: false
+index: true
 coverCredit: '"Estación telefónica central en Paris," from *El mundo físico* (1882), via [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:El_mundo_f%C3%ADsico,_1882_%22Estaci%C3%B3n_telef%C3%B3nica_central_en_Paris%22._%284074931516%29.jpg).'
 ---
 
@@ -39,12 +39,12 @@ but the comms proceeds in very standard patterns: all the GPUs reach a certain
 point, then the same amount of data needs to find its way to the other GPUs in
 a very fixed way.
 
-Expert paralelism is different. The routing shape is determined at inference
+Expert parallelism is different. The routing shape is determined at inference
 time. Static comms (an all-reduce followed by an all-gather, as is the fallback
 in vLLM) causes redundancy.
 
 Instead, we want to do dynamic, peer-to-peer routing of specific tokens to
-specific peer experts, whereever they might be in our network fabric. 
+specific peer experts, wherever they might be in our network fabric. 
 
 In this post, we'll go through how that works in popular EP kernel libraries
 
@@ -338,7 +338,7 @@ connected with RDMA. Attention runs on each GPU on a set of tokens $B_i$ that
 might vary between GPUs. Assume we're doing expert parallel with $E=8$ experts,
 of which $K=2$ are routed for each token. 
 
-At the each rank $r_i$, at the entrance to the EP layer, we have a tensor of
+At each rank $r_i$, at the entrance to the EP layer, we have a tensor of
 shape $(B_i, H)$ [>1]. The routing layer will run locally, and give us expert
 assignments for each token. We're assuming 2-out-of-8 experts: for each token,
 the router gives us a set of logits of length $8$ (i.e. a tensor of shape
@@ -485,7 +485,6 @@ So at the entrance to the EP layer each rank holds two things: the activation ro
 <text class="acc" x="650" y="276" text-anchor="middle">2</text>
 <rect class="box hot" x="666" y="257" width="32" height="30" rx="4" fill="#f4d6c0"/>
 <text class="acc" x="682" y="276" text-anchor="middle">7</text>
-<text class="sub" x="360" y="306" text-anchor="middle">Each token's activation row is scored against the experts; the top-2 logits become its expert assignment.</text>
 </svg>
 </figure>
 
@@ -517,7 +516,7 @@ distribution is lumpy and changes every step. An expert might draw a thousand
 tokens now and none next time. We can't know how many our local experts will
 receive until every other rank has run its router. So neither the size of the
 local activation buffer nor the slot in that buffer into which any particular
-token lands in is known in advance.
+token lands is known in advance.
 
 There are two ways to cope with not knowing the size. 
 
@@ -573,7 +572,6 @@ rectangle is the low-latency story, which we'll come to.)
 <text class="tag" x="268" y="130" text-anchor="middle">4</text>
 <text class="tag" x="404" y="130" text-anchor="middle">8</text>
 <text class="tag" x="472" y="130" text-anchor="middle">10</text>
-<text class="sub" x="302" y="148" text-anchor="middle">10 token slots, 0 wasted</text>
 <text class="title" x="20" y="176" text-anchor="start">Low latency</text>
 <text class="tag" x="20" y="193" text-anchor="start">fixed buffer  [ E_local, max_tokens, H ]  — padded to a cap</text>
 <path class="brk" d="M 134 223 L 134 218 L 300 218 L 300 223"/>
@@ -602,7 +600,6 @@ rectangle is the low-latency story, which we'll come to.)
 <rect class="pad" x="200" y="320" width="34" height="30" rx="3" fill="url(#bf-hatch)"/>
 <rect class="pad" x="234" y="320" width="34" height="30" rx="3" fill="url(#bf-hatch)"/>
 <rect class="pad" x="268" y="320" width="34" height="30" rx="3" fill="url(#bf-hatch)"/>
-<text class="sub" x="217" y="368" text-anchor="middle">20 slots, 10 are padding</text>
 <text class="tag" x="498" y="86" text-anchor="start">one slot per token;</text>
 <text class="tag" x="498" y="102" text-anchor="start">peers learn each</text>
 <text class="tag" x="498" y="118" text-anchor="start">expert's offset from</text>
@@ -1034,8 +1031,8 @@ permutation we did on the way in. The inverse permutation puts the outputs back
 into the by-source-rank layout that dispatch delivered tokens in.
 
 From there the transport runs in reverse. The rank that hosted the expert is
-now the sender, streaming its outputs back through the the original rank's
-per-peer queues back into the positions the tokens originally came from. 
+now the sender, streaming its outputs back through the original rank's
+per-peer queues into the positions the tokens originally came from. 
 
 <figure>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 292" class="cs-svg" role="img" aria-label="Combine send side: a rank unpermutes its expert outputs into by-dest-rank order and writes each group over the fabric to the destination ranks.">
@@ -1223,7 +1220,7 @@ high-throughput kernels are tough to push into CUDA graphs, which are more
 important during decode.
 
 So we want to figure out how to skip it. The coordination pass only ever
-existed to turn counts into write offsets, and that was only needed to because
+existed to turn counts into write offsets, and that was only needed because
 the compact buffer made each sender's offset depend on what every other sender
 did. If we're willing to give up compactness, we can prearrange space for each
 peer rank to write into. Instead of one packed buffer we pre-reserve a fixed,
@@ -1261,7 +1258,7 @@ range of every region as it fills, and the grouped GEMM masks the padded rows.
 <figure>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 278" class="ll-svg" role="img" aria-label="Low-latency receive buffer: one fixed private region per source rank for GPU 0's expert, padded to a worst-case chunk so most slots stay empty; the count is the arrival sentinel.">
 <defs>
-<pattern id="ll-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#f3f5f7"/><line x1="0" y1="0" x2="0" y2="6" stroke="#b9bfc6" stroke-width="1.6"/></pattern>
+<pattern id="ll-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#f1f3f5"/><line x1="0" y1="0" x2="0" y2="6" stroke="#b9bfc6" stroke-width="1.6"/></pattern>
 <marker id="ll-ar" viewBox="0 0 9 9" refX="7" refY="4.5" markerWidth="7" markerHeight="7" orient="auto" markerUnits="strokeWidth"><path class="acc-fill" d="M0 0 L8 4.5 L0 9 z"/></marker>
 <style>{`.ll-svg{width:100%;height:auto;display:block;--c-title:#2a2a2a;--c-mut:#555;--c-grid:#d5dadf}
 .dark .ll-svg{--c-title:#e5e5e5;--c-mut:#aaa;--c-grid:#454c54}
@@ -1269,100 +1266,103 @@ range of every region as it fills, and the grouped GEMM masks the padded rows.
 .ll-svg .title{font-size:13px;font-weight:700;fill:var(--c-title)}
 .ll-svg .tag{font-size:10.5px;fill:var(--c-mut)}
 .ll-svg .num{font-size:11px;font-weight:700;fill:#0784b5}
+.ll-svg .box{stroke:#444;stroke-width:1.2}
+.ll-svg .pad{stroke:#b9bfc6;stroke-width:1.1;stroke-dasharray:3 3}
 .ll-svg .cell{stroke:var(--c-grid);stroke-width:.8}
 .ll-svg .ccell{stroke:#0784b5;stroke-width:1.3}
+.ll-svg .sub{font-size:11px;font-style:italic;fill:var(--c-mut)}
 .ll-svg .acc-fill{fill:#0784b5}`}</style>
 </defs>
 <text class="title" x="16.0" y="18.0" text-anchor="start">Low latency: a static private region per source, no coordination</text>
 <text class="tag" x="52.0" y="46.0" text-anchor="middle">source</text>
 <text class="tag" x="360.0" y="46.0" text-anchor="middle">private region  (padded to a worst-case chunk)</text>
 <text class="tag" x="650.0" y="46.0" text-anchor="middle">count</text>
-<rect class="cell" x="20.0" y="58.0" width="64" height="22" rx="3" fill="#ffffff"/>
+<rect class="box" x="20.0" y="58.0" width="64" height="22" rx="3" fill="#ffffff"/>
 <text class="tag" x="52.0" y="73.0" text-anchor="middle">r0</text>
 <path d="M 87.0 69.0 L 116.0 69.0" stroke="#0784b5" stroke-width="1.3" fill="none" marker-end="url(#ll-ar)"/>
-<rect class="cell" x="120.0" y="58.0" width="80" height="22" rx="3" fill="#cee2f5"/>
-<rect class="cell" x="200.0" y="58.0" width="80" height="22" rx="3" fill="#cee2f5"/>
-<rect class="cell" x="280.0" y="58.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="360.0" y="58.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="440.0" y="58.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="520.0" y="58.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="box" x="120.0" y="58.0" width="80" height="22" rx="3" fill="#cee2f5"/>
+<rect class="box" x="200.0" y="58.0" width="80" height="22" rx="3" fill="#cee2f5"/>
+<rect class="pad" x="280.0" y="58.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="360.0" y="58.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="440.0" y="58.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="520.0" y="58.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
 <rect class="ccell" x="620.0" y="58.0" width="60" height="22" rx="3" fill="#d7eef7"/>
 <text class="num" x="650.0" y="73.0" text-anchor="middle">2</text>
-<rect class="cell" x="20.0" y="84.0" width="64" height="22" rx="3" fill="#ffffff"/>
+<rect class="box" x="20.0" y="84.0" width="64" height="22" rx="3" fill="#ffffff"/>
 <text class="tag" x="52.0" y="99.0" text-anchor="middle">r1</text>
 <path d="M 87.0 95.0 L 116.0 95.0" stroke="#0784b5" stroke-width="1.3" fill="none" marker-end="url(#ll-ar)"/>
-<rect class="cell" x="120.0" y="84.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="200.0" y="84.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="280.0" y="84.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="360.0" y="84.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="440.0" y="84.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="520.0" y="84.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="120.0" y="84.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="200.0" y="84.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="280.0" y="84.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="360.0" y="84.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="440.0" y="84.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="520.0" y="84.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
 <rect class="ccell" x="620.0" y="84.0" width="60" height="22" rx="3" fill="#d7eef7"/>
 <text class="num" x="650.0" y="99.0" text-anchor="middle">0</text>
-<rect class="cell" x="20.0" y="110.0" width="64" height="22" rx="3" fill="#ffffff"/>
+<rect class="box" x="20.0" y="110.0" width="64" height="22" rx="3" fill="#ffffff"/>
 <text class="tag" x="52.0" y="125.0" text-anchor="middle">r2</text>
 <path d="M 87.0 121.0 L 116.0 121.0" stroke="#0784b5" stroke-width="1.3" fill="none" marker-end="url(#ll-ar)"/>
-<rect class="cell" x="120.0" y="110.0" width="80" height="22" rx="3" fill="#cee2f5"/>
-<rect class="cell" x="200.0" y="110.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="280.0" y="110.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="360.0" y="110.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="440.0" y="110.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="520.0" y="110.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="box" x="120.0" y="110.0" width="80" height="22" rx="3" fill="#cee2f5"/>
+<rect class="pad" x="200.0" y="110.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="280.0" y="110.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="360.0" y="110.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="440.0" y="110.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="520.0" y="110.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
 <rect class="ccell" x="620.0" y="110.0" width="60" height="22" rx="3" fill="#d7eef7"/>
 <text class="num" x="650.0" y="125.0" text-anchor="middle">1</text>
-<rect class="cell" x="20.0" y="136.0" width="64" height="22" rx="3" fill="#ffffff"/>
+<rect class="box" x="20.0" y="136.0" width="64" height="22" rx="3" fill="#ffffff"/>
 <text class="tag" x="52.0" y="151.0" text-anchor="middle">r3</text>
 <path d="M 87.0 147.0 L 116.0 147.0" stroke="#0784b5" stroke-width="1.3" fill="none" marker-end="url(#ll-ar)"/>
-<rect class="cell" x="120.0" y="136.0" width="80" height="22" rx="3" fill="#cee2f5"/>
-<rect class="cell" x="200.0" y="136.0" width="80" height="22" rx="3" fill="#cee2f5"/>
-<rect class="cell" x="280.0" y="136.0" width="80" height="22" rx="3" fill="#cee2f5"/>
-<rect class="cell" x="360.0" y="136.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="440.0" y="136.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="520.0" y="136.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="box" x="120.0" y="136.0" width="80" height="22" rx="3" fill="#cee2f5"/>
+<rect class="box" x="200.0" y="136.0" width="80" height="22" rx="3" fill="#cee2f5"/>
+<rect class="box" x="280.0" y="136.0" width="80" height="22" rx="3" fill="#cee2f5"/>
+<rect class="pad" x="360.0" y="136.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="440.0" y="136.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="520.0" y="136.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
 <rect class="ccell" x="620.0" y="136.0" width="60" height="22" rx="3" fill="#d7eef7"/>
 <text class="num" x="650.0" y="151.0" text-anchor="middle">3</text>
-<rect class="cell" x="20.0" y="162.0" width="64" height="22" rx="3" fill="#ffffff"/>
+<rect class="box" x="20.0" y="162.0" width="64" height="22" rx="3" fill="#ffffff"/>
 <text class="tag" x="52.0" y="177.0" text-anchor="middle">r4</text>
 <path d="M 87.0 173.0 L 116.0 173.0" stroke="#0784b5" stroke-width="1.3" fill="none" marker-end="url(#ll-ar)"/>
-<rect class="cell" x="120.0" y="162.0" width="80" height="22" rx="3" fill="#cee2f5"/>
-<rect class="cell" x="200.0" y="162.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="280.0" y="162.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="360.0" y="162.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="440.0" y="162.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="520.0" y="162.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="box" x="120.0" y="162.0" width="80" height="22" rx="3" fill="#cee2f5"/>
+<rect class="pad" x="200.0" y="162.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="280.0" y="162.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="360.0" y="162.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="440.0" y="162.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="520.0" y="162.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
 <rect class="ccell" x="620.0" y="162.0" width="60" height="22" rx="3" fill="#d7eef7"/>
 <text class="num" x="650.0" y="177.0" text-anchor="middle">1</text>
-<rect class="cell" x="20.0" y="188.0" width="64" height="22" rx="3" fill="#ffffff"/>
+<rect class="box" x="20.0" y="188.0" width="64" height="22" rx="3" fill="#ffffff"/>
 <text class="tag" x="52.0" y="203.0" text-anchor="middle">r5</text>
 <path d="M 87.0 199.0 L 116.0 199.0" stroke="#0784b5" stroke-width="1.3" fill="none" marker-end="url(#ll-ar)"/>
-<rect class="cell" x="120.0" y="188.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="200.0" y="188.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="280.0" y="188.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="360.0" y="188.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="440.0" y="188.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="520.0" y="188.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="120.0" y="188.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="200.0" y="188.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="280.0" y="188.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="360.0" y="188.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="440.0" y="188.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="520.0" y="188.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
 <rect class="ccell" x="620.0" y="188.0" width="60" height="22" rx="3" fill="#d7eef7"/>
 <text class="num" x="650.0" y="203.0" text-anchor="middle">0</text>
-<rect class="cell" x="20.0" y="214.0" width="64" height="22" rx="3" fill="#ffffff"/>
+<rect class="box" x="20.0" y="214.0" width="64" height="22" rx="3" fill="#ffffff"/>
 <text class="tag" x="52.0" y="229.0" text-anchor="middle">r6</text>
 <path d="M 87.0 225.0 L 116.0 225.0" stroke="#0784b5" stroke-width="1.3" fill="none" marker-end="url(#ll-ar)"/>
-<rect class="cell" x="120.0" y="214.0" width="80" height="22" rx="3" fill="#cee2f5"/>
-<rect class="cell" x="200.0" y="214.0" width="80" height="22" rx="3" fill="#cee2f5"/>
-<rect class="cell" x="280.0" y="214.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="360.0" y="214.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="440.0" y="214.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="520.0" y="214.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="box" x="120.0" y="214.0" width="80" height="22" rx="3" fill="#cee2f5"/>
+<rect class="box" x="200.0" y="214.0" width="80" height="22" rx="3" fill="#cee2f5"/>
+<rect class="pad" x="280.0" y="214.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="360.0" y="214.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="440.0" y="214.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="520.0" y="214.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
 <rect class="ccell" x="620.0" y="214.0" width="60" height="22" rx="3" fill="#d7eef7"/>
 <text class="num" x="650.0" y="229.0" text-anchor="middle">2</text>
-<rect class="cell" x="20.0" y="240.0" width="64" height="22" rx="3" fill="#ffffff"/>
+<rect class="box" x="20.0" y="240.0" width="64" height="22" rx="3" fill="#ffffff"/>
 <text class="tag" x="52.0" y="255.0" text-anchor="middle">r7</text>
 <path d="M 87.0 251.0 L 116.0 251.0" stroke="#0784b5" stroke-width="1.3" fill="none" marker-end="url(#ll-ar)"/>
-<rect class="cell" x="120.0" y="240.0" width="80" height="22" rx="3" fill="#cee2f5"/>
-<rect class="cell" x="200.0" y="240.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="280.0" y="240.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="360.0" y="240.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="440.0" y="240.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
-<rect class="cell" x="520.0" y="240.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="box" x="120.0" y="240.0" width="80" height="22" rx="3" fill="#cee2f5"/>
+<rect class="pad" x="200.0" y="240.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="280.0" y="240.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="360.0" y="240.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="440.0" y="240.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
+<rect class="pad" x="520.0" y="240.0" width="80" height="22" rx="3" fill="url(#ll-hatch)"/>
 <rect class="ccell" x="620.0" y="240.0" width="60" height="22" rx="3" fill="#d7eef7"/>
 <text class="num" x="650.0" y="255.0" text-anchor="middle">1</text>
 </svg>
