@@ -46,8 +46,8 @@ experts per token:
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 818" class="ep-svg" font-family="'Berkeley Mono','Courier New',monospace" role="img" aria-label="Expert-parallel dispatch and combine across 8 GPUs in two NVLink nodes; each GPU lane holds its rank chip and the two experts it hosts, stacked. Ranks route each token to its top-2 experts and the results return.">
 <defs>
 <marker id="ep-ah" viewBox="0 0 9 9" refX="7" refY="4.5" markerWidth="9" markerHeight="9" orient="auto" markerUnits="strokeWidth"><path class="ep-ah-fill" d="M0 0 L8 4.5 L0 9 z"/></marker>
-<style>{`.ep-svg{--ep-wire:#9aa2ab;--ep-lane-s:#aab2bb;--ep-bracket:#777;--ep-divider:#bbb;--ep-title:#2a2a2a;--ep-muted:#555;--ep-ah:#777;--ep-accent:#0784b5}
-.dark .ep-svg{--ep-wire:#626c76;--ep-lane-s:#4a545f;--ep-bracket:#999;--ep-divider:#555;--ep-title:#e5e5e5;--ep-muted:#aaa;--ep-ah:#999;--ep-accent:#9bd4e4}
+<style>{`.ep-svg{width:100%;height:auto;display:block;--ep-wire:#9aa2ab;--ep-lane-s:#aab2bb;--ep-bracket:#777;--ep-divider:#bbb;--ep-title:#2a2a2a;--ep-muted:#555;--ep-ah:#777;--ep-accent:#0784b5}
+.dark .ep-svg,[data-theme='dark'] .ep-svg{--ep-wire:#626c76;--ep-lane-s:#4a545f;--ep-bracket:#999;--ep-divider:#555;--ep-title:#e5e5e5;--ep-muted:#aaa;--ep-ah:#999;--ep-accent:#9bd4e4}
 .ep-svg .title{font-size:18px;font-weight:700;fill:var(--ep-title)}
 .ep-svg .tag{font-size:14px;fill:var(--ep-muted)}
 .ep-svg .label{font-size:14.5px;fill:#2a2a2a}
@@ -441,7 +441,7 @@ So at the entrance to the EP layer each rank holds two things: the activation ro
 <defs>
 <marker id="rt-ar" viewBox="0 0 9 9" refX="7" refY="4.5" markerWidth="9" markerHeight="9" orient="auto" markerUnits="strokeWidth"><path class="ah-fill" d="M0 0 L8 4.5 L0 9 z"/></marker>
 <style>{`.rt-svg{width:100%;height:auto;display:block;--c-title:#2a2a2a;--c-mut:#555;--c-wire:#9aa2ab;--c-ah:#777;--c-strip:#c3cad1;--c-div:#e2e6ea}
-.dark .rt-svg{--c-title:#e5e5e5;--c-mut:#aaa;--c-wire:#626c76;--c-ah:#999;--c-strip:#4a545f;--c-div:#343d46}
+.dark .rt-svg,[data-theme='dark'] .rt-svg{--c-title:#e5e5e5;--c-mut:#aaa;--c-wire:#626c76;--c-ah:#999;--c-strip:#4a545f;--c-div:#343d46}
 .rt-svg text{font-family:'Berkeley Mono','Courier New',monospace}
 .rt-svg .title{font-size:17px;font-weight:700;fill:var(--c-title)}
 .rt-svg .tag{font-size:13px;fill:var(--c-mut)}
@@ -735,7 +735,7 @@ writeup](https://lmsys.org/blog/2025-05-05-large-scale-ep/).
 <defs>
 <pattern id="bf-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="var(--c-hbg)"/><line x1="0" y1="0" x2="0" y2="6" stroke="var(--c-hln)" stroke-width="1.6"/></pattern>
 <style>{`.bf-svg{width:100%;height:auto;display:block;--c-title:#2a2a2a;--c-mut:#555;--c-brk:#777;--c-hbg:#f1f3f5;--c-hln:#b9bfc6}
-.dark .bf-svg{--c-title:#e5e5e5;--c-mut:#aaa;--c-brk:#999;--c-hbg:#22272c;--c-hln:#4a545f}
+.dark .bf-svg,[data-theme='dark'] .bf-svg{--c-title:#e5e5e5;--c-mut:#aaa;--c-brk:#999;--c-hbg:#22272c;--c-hln:#4a545f}
 .bf-svg text{font-family:'Berkeley Mono','Courier New',monospace}
 .bf-svg .title{font-size:17px;font-weight:700;fill:var(--c-title)}
 .bf-svg .tag{font-size:13.5px;fill:var(--c-mut)}
@@ -825,7 +825,7 @@ missing: how big to make the buffer, and where every block sits inside it.
 <defs>
 <marker id="cg-ar" viewBox="0 0 9 9" refX="7" refY="4.5" markerWidth="8" markerHeight="8" orient="auto" markerUnits="strokeWidth"><path class="ah-fill" d="M0 0 L8 4.5 L0 9 z"/></marker>
 <style>{`.cg-svg{width:100%;height:auto;display:block;--c-title:#2a2a2a;--c-mut:#555;--c-wire:#9aa2ab;--c-ah:#777;--c-grid:#d5dadf;--c-strip:#c3cad1;--c-div:#e2e6ea;--c-acc:#0784b5;--c-empty:#f3f5f7}
-.dark .cg-svg{--c-title:#e5e5e5;--c-mut:#aaa;--c-wire:#626c76;--c-ah:#999;--c-grid:#454c54;--c-strip:#4a545f;--c-div:#343d46;--c-acc:#9bd4e4;--c-empty:#22272c}
+.dark .cg-svg,[data-theme='dark'] .cg-svg{--c-title:#e5e5e5;--c-mut:#aaa;--c-wire:#626c76;--c-ah:#999;--c-grid:#454c54;--c-strip:#4a545f;--c-div:#343d46;--c-acc:#9bd4e4;--c-empty:#22272c}
 .cg-svg text{font-family:'Berkeley Mono','Courier New',monospace}
 .cg-svg .title{font-size:17px;font-weight:700;fill:var(--c-title)}
 .cg-svg .tag{font-size:13px;fill:var(--c-mut)}
@@ -1175,7 +1175,7 @@ is what makes the transfer coarser than the routing.
 <marker id="pf-ar" viewBox="0 0 9 9" refX="7" refY="4.5" markerWidth="8" markerHeight="8" orient="auto" markerUnits="strokeWidth"><path class="ah-fill" d="M0 0 L8 4.5 L0 9 z"/></marker><marker id="pf-arA" viewBox="0 0 9 9" refX="7" refY="4.5" markerWidth="8" markerHeight="8" orient="auto" markerUnits="strokeWidth"><path class="acc-fill" d="M0 0 L8 4.5 L0 9 z"/></marker>
 <pattern id="pf-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="var(--c-hbg)"/><line x1="0" y1="0" x2="0" y2="6" stroke="var(--c-hln)" stroke-width="1.6"/></pattern>
 <style>{`.pf-svg{width:100%;height:auto;display:block;--c-title:#2a2a2a;--c-mut:#555;--c-wire:#9aa2ab;--c-ah:#777;--c-acc:#0784b5;--c-hbg:#f1f3f5;--c-hln:#b9bfc6;--c-brk:#777}
-.dark .pf-svg{--c-title:#e5e5e5;--c-mut:#aaa;--c-wire:#626c76;--c-ah:#999;--c-acc:#9bd4e4;--c-hbg:#22272c;--c-hln:#4a545f;--c-brk:#999}
+.dark .pf-svg,[data-theme='dark'] .pf-svg{--c-title:#e5e5e5;--c-mut:#aaa;--c-wire:#626c76;--c-ah:#999;--c-acc:#9bd4e4;--c-hbg:#22272c;--c-hln:#4a545f;--c-brk:#999}
 .pf-svg text{font-family:'Berkeley Mono','Courier New',monospace}
 .pf-svg .title{font-size:17px;font-weight:700;fill:var(--c-title)}
 .pf-svg .tag{font-size:13.5px;fill:var(--c-mut)}
@@ -1286,7 +1286,7 @@ queues into the positions the tokens came from.
 <defs>
 <marker id="cs-arA" viewBox="0 0 9 9" refX="7" refY="4.5" markerWidth="8" markerHeight="8" orient="auto" markerUnits="strokeWidth"><path class="acc-fill" d="M0 0 L8 4.5 L0 9 z"/></marker>
 <style>{`.cs-svg{width:100%;height:auto;display:block;--c-title:#2a2a2a;--c-mut:#555;--c-wire:#9aa2ab;--c-ah:#777;--c-acc:#0784b5;--c-brk:#777;--c-div:#cfd5db}
-.dark .cs-svg{--c-title:#e5e5e5;--c-mut:#aaa;--c-wire:#626c76;--c-ah:#999;--c-acc:#9bd4e4;--c-brk:#999;--c-div:#454c54}
+.dark .cs-svg,[data-theme='dark'] .cs-svg{--c-title:#e5e5e5;--c-mut:#aaa;--c-wire:#626c76;--c-ah:#999;--c-acc:#9bd4e4;--c-brk:#999;--c-div:#454c54}
 .cs-svg text{font-family:'Berkeley Mono','Courier New',monospace}
 .cs-svg .title{font-size:17px;font-weight:700;fill:var(--c-title)}
 .cs-svg .tag{font-size:13.5px;fill:var(--c-mut)}
@@ -1368,7 +1368,7 @@ vector that is the layer's output for that token[>7].
 <marker id="cr-ar" viewBox="0 0 9 9" refX="7" refY="4.5" markerWidth="8" markerHeight="8" orient="auto" markerUnits="strokeWidth"><path class="ah-fill" d="M0 0 L8 4.5 L0 9 z"/></marker><marker id="cr-arA" viewBox="0 0 9 9" refX="7" refY="4.5" markerWidth="8" markerHeight="8" orient="auto" markerUnits="strokeWidth"><path class="acc-fill" d="M0 0 L8 4.5 L0 9 z"/></marker>
 <pattern id="cr-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="var(--c-hbg)"/><line x1="0" y1="0" x2="0" y2="6" stroke="var(--c-hln)" stroke-width="1.6"/></pattern>
 <style>{`.cr-svg{width:100%;height:auto;display:block;--c-title:#2a2a2a;--c-mut:#555;--c-wire:#9aa2ab;--c-ah:#777;--c-acc:#0784b5;--c-brk:#777;--c-hbg:#f1f3f5;--c-hln:#b9bfc6;--c-strip:#c3cad1;--c-empty:#f3f5f7}
-.dark .cr-svg{--c-title:#e5e5e5;--c-mut:#aaa;--c-wire:#626c76;--c-ah:#999;--c-acc:#9bd4e4;--c-brk:#999;--c-hbg:#22272c;--c-hln:#4a545f;--c-strip:#4a545f;--c-empty:#22272c}
+.dark .cr-svg,[data-theme='dark'] .cr-svg{--c-title:#e5e5e5;--c-mut:#aaa;--c-wire:#626c76;--c-ah:#999;--c-acc:#9bd4e4;--c-brk:#999;--c-hbg:#22272c;--c-hln:#4a545f;--c-strip:#4a545f;--c-empty:#22272c}
 .cr-svg text{font-family:'Berkeley Mono','Courier New',monospace}
 .cr-svg .title{font-size:17px;font-weight:700;fill:var(--c-title)}
 .cr-svg .tag{font-size:13.5px;fill:var(--c-mut)}
@@ -1521,7 +1521,7 @@ fills; the grouped GEMM masks the padded rows.
 <marker id="ll-ar" viewBox="0 0 9 9" refX="7" refY="4.5" markerWidth="7.5" markerHeight="7.5" orient="auto" markerUnits="strokeWidth"><path class="acc-fill" d="M0 0 L8 4.5 L0 9 z"/></marker>
 <pattern id="ll-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="var(--c-hbg)"/><line x1="0" y1="0" x2="0" y2="6" stroke="var(--c-hln)" stroke-width="1.6"/></pattern>
 <style>{`.ll-svg{width:100%;height:auto;display:block;--c-title:#2a2a2a;--c-mut:#555;--c-acc:#0784b5;--c-brk:#777;--c-hbg:#f1f3f5;--c-hln:#b9bfc6;--c-wire:#9aa2ab}
-.dark .ll-svg{--c-title:#e5e5e5;--c-mut:#aaa;--c-acc:#9bd4e4;--c-brk:#999;--c-hbg:#22272c;--c-hln:#4a545f;--c-wire:#626c76}
+.dark .ll-svg,[data-theme='dark'] .ll-svg{--c-title:#e5e5e5;--c-mut:#aaa;--c-acc:#9bd4e4;--c-brk:#999;--c-hbg:#22272c;--c-hln:#4a545f;--c-wire:#626c76}
 .ll-svg text{font-family:'Berkeley Mono','Courier New',monospace}
 .ll-svg .title{font-size:17px;font-weight:700;fill:var(--c-title)}
 .ll-svg .tag{font-size:13.5px;fill:var(--c-mut)}
