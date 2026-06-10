@@ -20,9 +20,9 @@ Parallelism, Pipeline Parallelism, Context Parallelism, Expert Parallelism,
 etc. All have their place. But for MoE models, in the MoE layers, when you want
 to serve at large scale, 'wide Expert Parallelism' (wideEP) is king[>1].
 
-[>1]: See vLLM's original [DeepSeek V3 large-scale serving
+[>1]: See vLLM's original [DeepSeek large-scale serving
 post](https://vllm.ai/blog/2025-12-17-large-scale-serving) for a demonstration
-at production scale: DeepSeek-V3 at 2.2k tokens/s per GPU on an H200 cluster,
+at production scale: DeepSeek at 2.2k tokens/s per GPU on an H200 cluster,
 served with wideEP and data parallel attention.
 
 The other kinds of parallelism all require communication between GPUs, but
@@ -683,7 +683,7 @@ is hardly anything else to do, so the transfer itself is what we wait on.
 We'll start with the throughput-optimised standard EP shape, then discuss the
 latency-optimised shape.
 
-## High throughput
+## High throughput: ask, then send
 
 ### Dispatch
 
@@ -1149,10 +1149,21 @@ pace, with its depth bounding how far ahead the sender can get before it has
 to wait for the receiver to catch up. The queue is fixed-size too, but fixed
 at a constant.
 
+For the queues that cross nodes there's one more hop hiding in the picture.
+A token never travels point-to-point to an arbitrary remote GPU: it goes
+over RDMA to the GPU with the same index on the destination node, and that
+GPU forwards it over NVLink to its final host. Each GPU then only ever talks
+to its own counterparts across nodes, which keeps every RDMA flow on its own
+rail of the fabric and caps the number of connections each NIC has to keep
+fed.
+
 What lands in the compact buffer is grouped by where it came from, not by
 which expert it's for: the transfer is coarser than the routing[>6]. The
 grouped GEMM wants contiguous per-expert blocks, so the last step of dispatch
-is a local permute, from by-source order into by-expert order.
+is a local permute, from by-source order into by-expert order. In DeepEP this
+last step is the caller's: dispatch hands back the by-source buffer along
+with per-expert counts, and the serving framework does the reordering, or
+feeds the indices straight to a GEMM that can consume them.
 
 [>6]: A token is sent to a peer once if any of that peer's experts want it,
 even if two do, with the per-token expert assignment carried alongside. That
@@ -1447,7 +1458,7 @@ gate weights are applied separately, either folded into the activations before
 the expert GEMM or in the reduction step, so the kernel moving bytes doesn't have
 to know about them.
 
-## Low latency
+## Low latency: send without asking
 
 The reason to optimise the kernel for latency is the decode regime. Each rank
 holds only a handful of tokens, often one per sequence in the batch. The
@@ -1479,6 +1490,11 @@ $$
 with $e$ the local expert, $r$ the source rank, $R$ the number of ranks, and $\mathrm{chunk}$ the per-region cap. The dynamic
 prefix sum over real counts becomes a static stride times a fixed maximum, and
 the first thing that happens in the layer is the data send itself.
+
+Since the transfer is now the thing we wait on, the bytes are the latency,
+and DeepEP's low-latency dispatch shrinks them by quantising the payload to
+FP8 on the wire by default. The return path stays in BF16: combine's sums
+are where precision matters.
 
 The catch is that each private region has to be big enough for whatever its
 source might send, sized for the worst case rather than the actual count. Left
@@ -1643,21 +1659,26 @@ the count is ordered after the data it vouches for: it's issued on the same
 ordered channel (the same RDMA queue pair, or behind a memory fence over
 NVLink), so by the time the count shows up, the data is already in place.
 
-## Conclusion
+## Coming home
 
 That's the story. If you open
-[DeepEP](https://github.com/deepseek-ai/DeepEP)'s codebase you should recognise the shape.
+[DeepEP](https://github.com/deepseek-ai/DeepEP)'s codebase you should
+recognise the shape, though you'll now find these kernels under `legacy/`:
+the recent V2 rewrite rebuilds the library on top of NCCL's new device-side
+communication API. What the anatomy looks like after that rewrite is worth a
+post of its own.
 
-DeepEP itself is built for NVIDIA's stack: Hopper GPUs, NVLink within the node,
-InfiniBand-class RDMA between nodes. The
+DeepEP itself is built for NVIDIA's stack: Hopper and Blackwell GPUs, NVLink
+within the node, InfiniBand-class RDMA between nodes. The
 [UCCL](https://github.com/uccl-project/uccl) project reimplements the same
 primitives for lots more: AMD as well as NVIDIA GPUs, and any RDMA NIC, AWS's
 EFA, Broadcom's, at comparable performance.
 
-There's a growing stack of optimisations on top. Dynamic expert load
-balancing ([EPLB](https://github.com/deepseek-ai/EPLB)) replicates and
-re-places hot experts between steps: placement is only an indirection the
-kernel consults, so it's free to change. [vLLM's elastic
+There's a growing stack of optimisations on top. Expert load balancing
+([EPLB](https://github.com/deepseek-ai/EPLB)) computes replication and
+placement plans for hot experts, which serving systems apply periodically:
+placement is only an indirection the kernel consults, so it's free to
+change. [vLLM's elastic
 EP](https://vllm.ai/blog/2026-05-14-elastic-expert-parallelism) grows and
 shrinks the deployment: the world size only enters through $R$, in the
 counts and the regions, so ranks can join and leave. And the routing
