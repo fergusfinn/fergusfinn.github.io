@@ -1,0 +1,382 @@
+---
+title: 'Speculative KV coding II: how cheap can the predictor get?'
+description: |
+  The FP8-of-target predictor from our speculative KV coding post costs nearly
+  as much as just re-running prefill. Mapping the bits-versus-FLOPs frontier of
+  lossless KV compression, with the target's own early layers as the predictor.
+pubDate: 'Jun 9 2026'
+draft: true
+---
+
+{/*
+STATUS: Draft in progress — autonomous research session 2026-06-09
+
+OUTLINE:
+- [x] The objection: predictor cost vs re-prefill
+- [x] The frontier framing (bits vs predictor FLOPs)
+- [x] Why cross-model predictors fail
+- [x] Early-exit predictors + exact-prefix observation
+- [x] Phase-0 results 8B + 32B
+- [x] Why per-token probes cap out (attention decomposition)
+- [x] Trained heads + GGD results (per-token bound measured)
+- [x] Narrow continuation transformer, first round
+- [ ] Diagnostics: d'=2048 width, aux distillation, 32B continuation
+- [x] Frontier position report (update with diagnostics when they land)
+
+NOTES:
+- Audience: a skeptical researcher who read the first post
+- All numbers: held-out C4, N_TRAIN=N_EVAL=128 @ 1024 tokens, canonical
+  per-cell bin-integrated Gaussian coder unless stated
+- FOCUS AUDIT (re-check each revision): the post argues ONE thing — that
+  the right object is the bits-vs-predictor-FLOPs frontier, and that the
+  cheap end of that frontier is reachable. Cut anything not serving that.
+*/}
+
+In the [last post](/blog/kv-entropy-coder) we introduced speculative KV
+coding: compress a target model's KV cache losslessly by running a cheaper
+predictor model on the same prompt on both sides of the wire, and arithmetic
+coding the true cache against the predictor's output. With the FP8
+quantisation of the target as the predictor, the cache codes at about 6.3
+bits per scalar instead of 16, and about 2.1 bits per element for
+FP8-native caches.
+
+A skeptical reader will have noticed something, though: every place you
+would want this, there is a do-nothing alternative that transfers zero
+bits. The decoder holds the prompt and the weights. It can always just
+*re-run prefill* and reconstruct the cache exactly, paying one target
+forward pass and no bandwidth at all[>1]. Speculative KV coding only earns its
+keep if the predictor is meaningfully cheaper than the target, because the
+scheme's real cost is not the bits, it's the predictor's forward pass on
+the decode side. And the FP8-of-target predictor is *not* meaningfully
+cheaper: on FP8-capable hardware it costs about half a bf16 prefill.
+Paying 0.5 prefills plus 6.3 bits per scalar to avoid paying 1.0 prefills
+is a real saving, but it is not the regime that makes anyone redesign a
+serving stack.
+
+[>1]: Modulo bit-identical determinism of the prefill itself, which is the same requirement our scheme already carries for the predictor. See the first post.
+
+So the object of study should not be a compression ratio. It should be the
+**bits-versus-predictor-FLOPs frontier**: for each predictor budget $x$
+(measured as a fraction of one bf16 target prefill), what is the best
+achievable lossless rate? The two trivial endpoints are free: at $x = 0$,
+code the raw cache against its per-channel statistics (10.3 b/s for
+Qwen3-8B); at $x = 1$, re-prefill and send nothing. Published speculative
+KV coding is one interior point, at roughly $(0.5, 6.3)$. The interesting
+question, and the one this post attacks, is what the curve looks like at
+small $x$. That is where "a very small model codes for a very large one"
+either becomes real or dies.
+
+## What the cross-model attempts taught us
+
+The obvious way to get a cheap predictor is a smaller model from the same
+family. Our attempts so far have not landed it: a per-layer linear bridge
+from Qwen3-4B's KV onto Qwen3-8B's KV codes at 12.0 b/s (worse than no
+predictor under the same coder), and a first pass at training the 4B with
+LoRA jointly with the bridge under coding-length loss reaches 9.5 b/s,
+against the FP8-of-target's 6.3 at the same cost. These are first
+attempts with shallow adapters and small calibration sets, not a ceiling.
+But the *shape* of where they struggle is informative about what to build
+next.
+
+First, K. Two independently trained models encode their K directions as
+essentially unrelated per-head rotations. Qwen3's QK-norm constrains K
+onto a sphere, and a bridge has to learn a sphere-to-sphere rotation per
+head per layer before it can start paying for anything else. That is a
+lot of budget spent recovering something the target's own weights give
+you for free.
+
+Second, V. The smaller model's late-layer V residual grows monotonically
+with depth, and feeding the bridge the source's neighbouring layers does
+not fix it: whatever produces the target's late V, the small model's
+forward pass does not surface it in a linearly accessible form.
+
+Both difficulties evaporate if the predictor shares the target's weights.
+That does not close the cross-model door (a deeper bridge trained on more
+data is still an open line), but it makes the weight-sharing predictor
+the natural next rung on the ladder.
+
+## The target's own first $k$ layers
+
+Run the target's layers $0..k{-}1$ on the prompt, plus the (cheap) KV
+projections of layer $k$. Two things fall out.
+
+The first is almost embarrassing: the KV cache for layers $0..k$ is now
+**bit-identical** to the target's, because we ran the target's own
+computation. Those layers cost zero bits. No prediction, no residual, no
+coder. A fraction $(k{+}1)/L$ of the cache is simply *recomputed* rather
+than transferred, at a fraction $k/L$ of the prefill FLOPs.
+
+The second is a feature vector: the layer-$k$ hidden state $h_k$, the
+actual residual stream the target would use to compute every deeper
+layer's KV. Per deeper layer, fit a closed-form linear probe from $h_k$ to
+that layer's cached K and V (K probed in un-rotated RoPE space, since both
+sides know positions). This is the predictor family: exact prefix plus
+linear read-out, with one knob $k$ that sweeps the frontier.
+
+Results for Qwen3-8B (36 layers), canonical coder, whole-cache rates:
+
+| $k$ | $x$ (FLOPs) | b/s | vs anchors |
+| :--- | ---: | ---: | :--- |
+| 0  | 0.04 | 9.91 | x=0 anchor is 10.33 |
+| 2  | 0.10 | 9.17 | |
+| 4  | 0.15 | 8.58 | |
+| 6  | 0.20 | 8.01 | |
+| 9  | 0.28 | 7.13 | |
+| 12 | 0.36 | **6.28** | FP8 anchor's rate at 72% of its cost |
+| 18 | 0.52 | 4.54 | |
+| 24 | 0.68 | 2.87 | |
+
+And for Qwen3-32B (64 layers), where the published FP8 anchor sits at
+$(0.5, 5.98)$:
+
+| $k$ | $x$ (FLOPs) | b/s |
+| :--- | ---: | ---: |
+| 0  | 0.02 | 10.06 |
+| 2  | 0.05 | 9.64 |
+| 4  | 0.08 | 9.29 |
+| 8  | 0.14 | 8.63 |
+| 11 | 0.19 | 8.11 |
+| 16 | 0.27 | 7.27 |
+| 21 | 0.34 | 6.45 |
+| 32 | 0.51 | **4.74** |
+
+At the same predictor budget as the FP8-of-target anchor, the early-exit
+predictor codes the 32B cache 1.2 b/s tighter. And unlike the FP8
+predictor, the curve extends smoothly down to a few percent of a prefill.
+Every point also dominates the natural hybrid competitor (run the FP8
+predictor partway and code its layers only): per unit of predictor
+compute, a bit-exact bf16 layer eliminates 10.3 bits of cache, while an
+FP8-predicted layer eliminates 8.1.
+
+[>_1]
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 470" class="kv-frontier-svg" font-family="'Berkeley Mono','Courier New',monospace" role="img" aria-label="Bits per scalar versus predictor FLOPs for early-exit predictors on Qwen3-8B and Qwen3-32B, against the FP8-of-target anchors and the re-prefill endpoint.">
+  <defs><style>{`
+    .kv-frontier-svg .axis   { stroke: #444; stroke-width: 1.2; fill: none; }
+    .kv-frontier-svg .grid   { stroke: #ddd; stroke-width: 0.7; fill: none; }
+    .kv-frontier-svg .lbl    { font-size: 13px; fill: #2a2a2a; }
+    .kv-frontier-svg .tick   { font-size: 12px; fill: #555; }
+    .kv-frontier-svg .s8     { fill: #c2603e; }
+    .kv-frontier-svg .s8l    { stroke: #c2603e; stroke-width: 1.6; fill: none; }
+    .kv-frontier-svg .s32    { fill: #3a6ea5; }
+    .kv-frontier-svg .s32l   { stroke: #3a6ea5; stroke-width: 1.6; fill: none; }
+    .kv-frontier-svg .anch   { fill: #777; }
+    .kv-frontier-svg .env    { stroke: #999; stroke-width: 1.3; stroke-dasharray: 5,4; fill: none; }
+    .dark .kv-frontier-svg .lbl  { fill: #e5e5e5; }
+    .dark .kv-frontier-svg .tick { fill: #aaa; }
+    .dark .kv-frontier-svg .grid { stroke: #3a3a3a; }
+    .dark .kv-frontier-svg .axis { stroke: #bbb; }
+    .dark .kv-frontier-svg .env  { stroke: #888; }
+  `}</style></defs>
+  <line class="grid" x1="64.0" y1="418.0" x2="750.3" y2="418.0" />
+  <text class="tick" x="56.0" y="422.0" text-anchor="end">0</text>
+  <line class="grid" x1="64.0" y1="346.7" x2="750.3" y2="346.7" />
+  <text class="tick" x="56.0" y="350.7" text-anchor="end">2</text>
+  <line class="grid" x1="64.0" y1="275.5" x2="750.3" y2="275.5" />
+  <text class="tick" x="56.0" y="279.5" text-anchor="end">4</text>
+  <line class="grid" x1="64.0" y1="204.2" x2="750.3" y2="204.2" />
+  <text class="tick" x="56.0" y="208.2" text-anchor="end">6</text>
+  <line class="grid" x1="64.0" y1="132.9" x2="750.3" y2="132.9" />
+  <text class="tick" x="56.0" y="136.9" text-anchor="end">8</text>
+  <line class="grid" x1="64.0" y1="61.6" x2="750.3" y2="61.6" />
+  <text class="tick" x="56.0" y="65.6" text-anchor="end">10</text>
+  <text class="tick" x="64.0" y="436.0" text-anchor="middle">0</text>
+  <text class="tick" x="235.6" y="436.0" text-anchor="middle">0.25</text>
+  <text class="tick" x="407.1" y="436.0" text-anchor="middle">0.5</text>
+  <text class="tick" x="578.7" y="436.0" text-anchor="middle">0.75</text>
+  <text class="tick" x="750.3" y="436.0" text-anchor="middle">1</text>
+  <line class="axis" x1="64.0" y1="418.0" x2="750.3" y2="418.0" />
+  <line class="axis" x1="64.0" y1="418.0" x2="64.0" y2="26.0" />
+  <text class="lbl" x="407" y="462" text-anchor="middle">predictor FLOPs (fraction of one bf16 prefill)</text>
+  <text class="lbl" transform="rotate(-90 16 222)" x="16" y="222" text-anchor="middle">bits / scalar</text>
+  <path class="env" d="M 64.0 49.9 L 407.1 194.9 L 750.3 418.0" />
+  <text class="tick" x="448.3" y="147.2">previously available</text>
+  <text class="tick" x="448.3" y="168.5">(anchors + re-prefill)</text>
+  <path class="s8l" d="M 92.8 64.8 L 129.2 91.2 L 166.3 112.2 L 202.6 132.6 L 256.8 163.9 L 311.7 194.2 L 421.5 256.2 L 530.7 315.7" />
+  <path class="s32l" d="M 78.4 59.5 L 99.7 74.5 L 120.3 86.9 L 162.1 110.5 L 193.7 129.0 L 246.5 158.9 L 298.7 188.1 L 414.0 249.1" />
+  <circle class="s8" cx="92.8" cy="64.8" r="4" />
+  <circle class="s8" cx="129.2" cy="91.2" r="4" />
+  <circle class="s8" cx="166.3" cy="112.2" r="4" />
+  <circle class="s8" cx="202.6" cy="132.6" r="4" />
+  <circle class="s8" cx="256.8" cy="163.9" r="4" />
+  <circle class="s8" cx="311.7" cy="194.2" r="4" />
+  <circle class="s8" cx="421.5" cy="256.2" r="4" />
+  <circle class="s8" cx="530.7" cy="315.7" r="4" />
+  <circle class="s32" cx="78.4" cy="59.5" r="4" />
+  <circle class="s32" cx="99.7" cy="74.5" r="4" />
+  <circle class="s32" cx="120.3" cy="86.9" r="4" />
+  <circle class="s32" cx="162.1" cy="110.5" r="4" />
+  <circle class="s32" cx="193.7" cy="129.0" r="4" />
+  <circle class="s32" cx="246.5" cy="158.9" r="4" />
+  <circle class="s32" cx="298.7" cy="188.1" r="4" />
+  <circle class="s32" cx="414.0" cy="249.1" r="4" />
+  <rect class="anch" x="60.0" y="45.9" width="8" height="8" />
+  <rect class="anch" x="403.1" y="190.9" width="8" height="8" />
+  <rect class="anch" x="403.1" y="200.9" width="8" height="8" />
+  <path class="anch" d="M 750.3 412.0 l 5 9 l -10 0 z" />
+  <text class="tick" x="744.3" y="408.0" text-anchor="end">re-prefill</text>
+  <circle class="s8" cx="489.5" cy="40.3" r="4" />
+  <text class="tick" x="499.5" y="44.3">early-exit, Qwen3-8B</text>
+  <circle class="s32" cx="489.5" cy="60.3" r="4" />
+  <text class="tick" x="499.5" y="64.3">early-exit, Qwen3-32B</text>
+  <rect class="anch" x="485.5" y="76.3" width="8" height="8" />
+  <text class="tick" x="499.5" y="84.3">FP8-of-target / PMF anchors</text>
+</svg>
+
+[>_1]: The measured frontier. Dashed: what was previously available, namely the no-predictor anchor, the FP8-of-target anchor, and re-prefill, plus time-sharing between them. Early-exit predictors (circles) sit below that envelope at every budget on both targets.
+
+
+## Why per-token probes cap out, and what that points at
+
+The linear probes contribute much less than the exact prefix does:
+predicted-layers-only rates sit between 9.4 and 10.2 b/s against a
+no-predictor anchor of 10.33, and the per-layer profile decays from
+about 9.0 b/s one block past the exit toward the anchor within four to
+eight blocks.
+
+It is tempting to read that as "deep KV is unpredictable", and it would
+be wrong. There is a structural reason a per-token map from $h_k$ has to
+cap out, however much capacity you give it: the missing computation is
+not a per-token function. Layer $l$'s KV at position $t$ depends,
+through $l - k$ rounds of attention, on the hidden states of *other*
+positions. A probe that sees only $h_k(t)$ cannot represent that mixing,
+in the same way that no amount of training lets a pointwise function
+compute a convolution. The FP8-of-target predictor codes at 6.26
+precisely because it runs the full attention stack and tracks the
+mixing; its only sin is rounding noise.
+
+Read this way, the probe numbers are not a verdict, they are a
+decomposition. They measure how much of deep KV is carried by the
+position's own mid-stack state (up to about 1.6 b/s one block past the
+exit, decaying within a few blocks), and how much travels through
+attention (the rest). The
+predictor-design question becomes concrete: how *narrow* can the
+continuation computation be and still carry the attention-mediated
+part? The target spends width 4096 on blocks $k..L$; nothing says the
+prediction-relevant content of those blocks needs anything close to
+that.
+
+## The FP8-native cache, where this gets practical
+
+Deployed caches are increasingly FP8 already (vLLM, SGLang, TRT-LLM
+defaults), so the deployment-relevant question is what early exit does
+to an FP8 e4m3 cache with per-tensor scales. Same scheme: the prefix
+layers reproduce the FP8 cache bit-exactly (same values, same cast),
+and the probes code the FP8 symbols of the deeper layers. Qwen3-8B:
+
+| $k$ | $x$ (FLOPs) | b/elem | vs raw FP8 |
+| :--- | ---: | ---: | :--- |
+| 0  | 0.04 | 5.89 | 1.36x |
+| 2  | 0.10 | 5.38 | 1.49x |
+| 6  | 0.20 | 4.68 | 1.71x |
+| 12 | 0.36 | 3.64 | 2.20x |
+| 18 | 0.52 | 2.59 | 3.09x |
+| 24 | 0.68 | 1.61 | 4.98x |
+
+Two things to note. The probes earn much more here than in the bf16
+case: predicted-layers-only rates run 5.3 to 6.1 bits against a raw
+8.0, because an FP8 element has less entropy for the prediction to
+miss. And the cheap end is genuinely cheap: the $k = 0$ point is
+embeddings, KV projections, and linear probes, about four percent of
+a prefill, and it already takes a third off every FP8 cache it
+touches. The published FP8-of-target anchor (2.22 b/elem at $x = 0.5$)
+still codes tighter at its budget; the curve here is what the budgets
+*below* it buy.
+
+And Qwen3-32B, same profile:
+
+| $k$ | $x$ (FLOPs) | b/elem | vs raw FP8 |
+| :--- | ---: | ---: | :--- |
+| 0  | 0.02 | 5.98 | 1.34x |
+| 4  | 0.08 | 5.47 | 1.46x |
+| 8  | 0.14 | 5.08 | 1.58x |
+| 11 | 0.19 | 4.74 | 1.69x |
+| 16 | 0.27 | 4.23 | 1.89x |
+| 21 | 0.34 | 3.74 | 2.14x |
+| 32 | 0.51 | 2.74 | 2.92x |
+
+The shape repeats at scale: a third off at two percent of a prefill,
+2.1x at a third. The FP8-of-target anchor (2.05 b/elem) keeps its crown
+at $x = 0.5$; everything below that budget now belongs to early exit.
+
+## Training the continuation
+
+We can measure the per-token term directly: train per-layer MLP heads
+from $h_k$ jointly with a per-cell generalised-Gaussian coder (the probe
+residual is heavy-tailed, and a GGD prices the tails honestly), under
+the coding-length loss itself. The answer barely moves: 9.83 to 9.79 b/s
+at $k = 6$. That is the no-attention term measured, not a limit on
+prediction; it says the recoverable information travels through the
+mixing, so the predictor has to mix.
+
+The experiment that follows is a **narrow continuation transformer**:
+project $h_k$ down to width $d' \ll 4096$, run one narrow causal block
+(RoPE attention plus MLP) per missing target layer, and read each
+layer's KV out of the narrow stream through a learned projection. It is
+the missing computation, miniaturised. FLOPs scale as $(d'/4096)^2$ per
+block, so a $d' = 1024$ continuation of 29 blocks costs about five
+percent of a prefill on top of the $k$-layer prefix. Trained under the
+same coding-length loss, on 8x the calibration data (the head runs were
+also data-starved: 600M parameters against 131k tokens).
+
+First round of results, twelve thousand steps, random init, on a grid
+of $k \in \{6, 12\}$ and $d' \in \{512, 1024\}$, plus a variant whose
+narrow stream also emits a per-token $\sigma$ scale (residual size is
+content-dependent, and a static per-cell $\sigma$ pays both ways):
+
+| config | pred-layers b/s | vs per-token bound |
+| :--- | ---: | :--- |
+| $k{=}6$, $d'{=}512$ | 9.72 | bound 9.79 |
+| $k{=}6$, $d'{=}1024$ | 9.68 | |
+| $k{=}6$, $d'{=}1024$, $\sigma$-head | 9.65 | |
+| $k{=}12$, $d'{=}512$ | 9.61 | bound 9.71 |
+| $k{=}12$, $d'{=}1024$ | 9.57 | |
+
+The continuation does beat every per-token bound, so attention in the
+predictor recovers information no pointwise head can. But honestly
+accounted, the first round only moves the frontier a little: at
+$k = 12$ it takes the point from $(0.36, 6.28)$ to roughly
+$(0.39, 6.12)$. Put per-FLOP: an exact target layer removes about 10.3
+bits of whole-cache rate per unit of prefill spent, and this
+continuation removes about 3. Until a learned continuation clears the
+10.3 bar, the bf16 frontier is simply "how much of the real model you
+run", plus small change. The live levers, runs in flight: width (does
+$d' = 2048$ bend it), denser supervision (distilling the narrow stream
+against projections of the true hidden states), and longer training —
+twelve thousand steps on a billion tokens of signal is an early stop,
+not an endpoint.
+
+The FP8 regime tells a different story at the cheap end, and it is
+worth noticing: there the $k = 0$ probes alone remove 2.1 b/elem for
+four percent of a prefill, roughly five times more bit-per-FLOP
+efficient than running real layers. Prediction is weak where the
+symbols are high-entropy (bf16 tails) and strong where quantisation has
+already thrown the tails away. Cheap predictors and coarse caches are
+natural partners.
+
+## Where the frontier stands
+
+A position report, not a verdict; every number in this post is a first
+pass with obvious headroom in data, capacity, architecture, and coder.
+
+What is already measured. At moderate budgets the early-exit family
+wins outright: at the FP8 anchor's own cost it codes the 32B cache 1.2
+b/s tighter (4.74 against 5.98), and it reaches the anchor's rate at
+72 percent of the anchor's cost on 8B. On FP8-native caches, the kind
+deployments actually hold, the four-percent-of-a-prefill point already
+buys 1.36x, rising to 2.2x at a third of a prefill. Those are
+deployable-shaped numbers: a prefix-cache tier or a cross-datacenter
+transfer can pick its point on the curve today.
+
+What is still open is how far down the cheap end goes. Below
+$x \approx 0.15$ the bf16 curve currently rides on the exact prefix
+alone, and the decomposition above says the rest of the information
+travels through attention. The continuation transformer is the live
+attack on that region; its results will say whether the
+attention-mediated share can be carried at narrow width, or whether it
+needs a budget closer to the prefix itself.
+
+{/* CONTINUATION RESULTS SLOT — update when cont_k{6,12}_d{512,1024}
+land. Then: 32B continuation, FP8-native continuation, and the
+determinism/throughput engineering section from post I applies as-is. */}
+
