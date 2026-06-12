@@ -1,4 +1,5 @@
 import { defineConfig } from 'astro/config'
+import fs from 'node:fs'
 import tailwindcss from '@tailwindcss/vite'
 import mdx from '@astrojs/mdx'
 import sitemap from '@astrojs/sitemap'
@@ -15,6 +16,18 @@ import rehypeKatex from 'rehype-katex'
 import rehypeSlug from 'rehype-slug'
 import rehypeAutolinkHeadings from 'rehype-autolink-headings'
 
+// Slugs of posts marked index:false — public by URL but kept out of the
+// sitemap (and, via their own filters, the blog index and RSS feed).
+const unindexedSlugs = fs
+  .readdirSync('./src/content/blog')
+  .filter((f) => /\.(md|mdx)$/.test(f))
+  .filter((f) =>
+    /^index:\s*false\s*$/m.test(
+      fs.readFileSync(`./src/content/blog/${f}`, 'utf8').split('---')[1] ?? '',
+    ),
+  )
+  .map((f) => f.replace(/\.(md|mdx)$/, ''))
+
 // https://astro.build/config
 export default defineConfig({
   site: 'https://fergusfinn.com',
@@ -25,7 +38,9 @@ export default defineConfig({
   },
   integrations: [
     mdx(),
-    sitemap(),
+    sitemap({
+      filter: (page) => !unindexedSlugs.some((slug) => page.includes(`/blog/${slug}`)),
+    }),
     icon(),
     preact(),
     partytown({

@@ -1,0 +1,279 @@
+---
+title: 'UCCL-EP: An expert parallel communications kernel without owning the NIC'
+description: |
+  How UCCL reimplements the DeepEP kernels for arbitrary hardware by swapping
+  the transport out from under them.
+pubDate: 'Jun 12 2026'
+coverCredit: '"Office of the American Telegraph Company, Corner of Broadway and
+  Liberty Street, New York - Telegrams for Europe," from *Harper''s Weekly*
+  (1866), via the [Library of Congress](https://www.loc.gov/pictures/item/2021651463/).'
+index: false
+---
+
+In the [last post](/blog/anatomy-of-a-high-performance-ep-kernel) we looked at
+how expert parallel communications kernels work. This was a story of how the
+original
+[DeepEP](https://github.com/deepseek-ai/DeepEP/blob/main/docs/legacy.md)
+library from DeepSeek was organized. That library relies on
+GPU-initiated communication: the GPU has to be able to tell the NIC directly
+what to transfer and when.
+
+The primitives that library introduces are sufficiently general and powerful
+that others have built on them to expand support across NICs and across GPU
+types. This is the story of [UCCL](https://arxiv.org/abs/2504.17307),
+specifically [UCCL-EP](https://arxiv.org/abs/2512.19849), which takes
+DeepEP-style communication patterns and makes them work for arbitrary
+NIC-accelerator pairs.
+
+We're interested in heterogeneous hardware here at Doubleword. We want the most
+tokens for the lowest price, regardless of what makes them[>A]. Doubleword was
+recently named as one of six companies in the first wave of UK Sovereign AI
+investments[>B], which has given us access to an allocation on the AI
+Research Resource, including time on
+[Isambard-AI](https://arxiv.org/abs/2410.11199), the UK’s national AI
+supercomputing facility.
+
+Isambard-AI is a great facility. But its chips are connected with the
+[HPE Slingshot](https://buy.hpe.com/uk/en/options/enterprise-networking-products/switches/hpe-slingshot/p/1012904596)
+interconnect. No GPU-initiated communication, no DeepEP[>C]. The inference
+shapes that high-performance point-to-point EP kernels like DeepEP permit
+(Two-Batch Overlap, WideEP) are crucial for us to maximise the intelligence
+we can provide per pound spent.
+
+This post is about how UCCL-EP gets expert parallelism to work across arbitrary
+interconnects.
+
+[>A]: See our earlier posts on [bringing up Deepseek-v4 Flash on MI300x](https://fergusfinn.com/blog/deepseek-v4-flash-mi300x/)
+
+[>B]: [Our first investments](https://sovereignai.gov.uk/post/our-first-investments), UK Sovereign AI
+
+[>C]: Also no UCCL, yet (we're working on [it](https://github.com/uccl-project/uccl/issues/956)). 
+
+## The DeepEP contract
+
+The fast parallel structure that DeepEP builds on relies on the existence of a
+few simple remote communication primitives:
+
+1. **A one-sided write**: put these bytes at that address on that rank. The
+   receiver doesn't post a matching receive or run any code to accept the
+   data[>1]: it's a GPU in the middle of its own kernel, and its half of the
+   protocol is to poll local memory until the bytes arrive.
+2. **An ordered signal**: an atomic add into a known slot, telling the
+   receiver the data has arrived. We need to be able to do this and know that
+   it will land _after_ the data has landed, so there's a strict ordering
+   requirement.
+3. **A quiet**: confirmation on the sender-side that all of its writes have
+   completed, needed before it can reuse a source buffer or signal completion
+   to anyone else.
+
+[>1]: Contrast two-sided send/recv, where both ends participate in every
+transfer.
+
+This contract is NVSHMEM's device API: `put_nbi` for the write,
+`amo_nonfetch_add` for the signal, `quiet` for the fence. DeepEP calls these
+functions from NVSHMEM. The problem is that:
+
+1. On the accelerator side, NVSHMEM is NVIDIA only.
+2. On the NIC side, IBGDA[>2], the mechanism that lets the GPU satisfy this
+   contract itself, only works on NVIDIA NICs.
+
+[>2]: InfiniBand GPUDirect Async. Mellanox/NVIDIA's name for GPU-initiated
+networking.
+
+UCCL bridges the gaps by implementing the exact same contract[>3], providing
+NVSHMEM's IBGDA primitives on arbitrary NICs and GPUs.
+
+[>3]: UCCL's device-side shim exports `nvshmemi_ibgda_put_nbi_warp`,
+`nvshmemi_ibgda_amo_nonfetch_add`, and `nvshmemi_ibgda_quiet`, so DeepEP's
+kernels compile against it largely unchanged.
+
+## How DeepEP does it
+
+An RDMA NIC is driven through queues in memory. To send something, a process
+writes a work queue entry, a small descriptor carrying the opcode, source
+address, destination address, and length, into a queue pair on the NIC[>4],
+then writes to a doorbell register on the NIC to say there is work to do. The
+NIC reads the descriptor, moves the bytes, and posts a completion into a
+completion queue. Ordinarily the process driving the NIC runs on the CPU.
+
+[>4]: A queue pair is RDMA's connection object: a send queue and a receive
+queue through which a process hands descriptors to the NIC, executed in
+order, with completions reported to a companion completion queue.
+
+IBGDA moves the whole arrangement onto the GPU. The queue pair and completion
+queue are allocated in GPU memory, and the NIC's doorbell register is mapped
+into the GPU's address space. A warp inside the dispatch kernel builds the
+work queue entry itself, issues a memory fence, and writes the doorbell over
+PCIe. The NIC then pulls the payload directly out of HBM[>5] and sends it.
+
+[>5]: Via GPUDirect RDMA: the NIC DMAs to and from GPU memory without staging
+through host RAM. This needs the `nvidia_peermem` kernel module (or dmabuf)
+so the NIC can get at GPU pages.
+
+This satisfies the contract above trivially. The one-sided write is a write
+descriptor. The signal is an atomic-add descriptor posted to the same queue
+pair, and because a queue pair executes its descriptors in order, the
+signal-after-data guarantee comes for free. The quiet is the GPU polling the
+completion queue until everything it posted has completed.
+
+This is the fastest implementation you can reasonably build: a token's send
+costs one descriptor and one doorbell write from the warp that owns it. But it
+all depends on the NIC cooperating with the GPU. The NIC has to work with its
+queues living in GPU memory, its doorbell being written by a GPU, and its DMA
+engine reaching into HBM. 
+
+The requirement that it does so creates an MxN problem: every GPU and NIC
+pairing has to be engineered to work together, vendor by vendor. Hyperscalers,
+as much as NVIDIA might want them to, won't just buy NVIDIA GPUs and NVIDIA
+NICs and call it a day.
+
+On AWS's EFA, Broadcom's NICs, or HPE's Slingshot, there is no GPU-ownable
+queue to build any of this on, and the contract can't be satisfied in this way.
+
+## Keep the contract, swap the transport
+
+UCCL-EP's starting observation is that nothing in the DeepEP dispatch and
+combine kernels depends on how the contract is implemented. The queues, the
+layouts, the formula addressing all live above it. So UCCL keeps DeepEP's
+kernels nearly as they are and reimplements the three functions underneath
+them: `nvshmemi_ibgda_put_nbi_warp`, `nvshmemi_ibgda_amo_nonfetch_add`, and
+`nvshmemi_ibgda_quiet`.
+
+The challenge is how to make those functions do what they're supposed to. If we
+can't get the GPU to drive the NIC directly, what can we do? UCCL manages it by
+pointing the GPU at a queue it can always write: ordinary host memory.
+
+Since the CPU _can_ drive the NIC (otherwise, what would the NIC be designed
+to interface with), UCCL runs a constantly spinning CPU thread, the _proxy_,
+that monitors that queue and picks up and dispatches commands from the GPU.
+
+To run a `put`, the warp packs a 16-byte command[>6] carrying the opcode, the
+destination rank, the transfer size, and the source and destination addresses,
+and pushes it onto a ring buffer in pinned host memory. The signal is another
+command type on the same ring. The quiet is too: the GPU posts a quiet command
+and waits for the ring's consumer index to move past it, and the proxy doesn't
+consume a quiet until the network has acknowledged everything it posted before
+it.
+
+[>6]: 128 bits exactly. By opcodes we mean which part of the contract, almost
+literally: write, atomic, quiet (plus a barrier for setup). Everything is
+squeezed: the rank gets 8 bits, the size 24, and each address 32. Addresses can
+be smaller because they aren't pointers: buffers live in what NVSHMEM calls a
+symmetric heap, the same regions allocated and registered on every rank, so an
+address is just an aligned offset into a region both ends already know.
+
+The command carries addresses, not data: the activations stay in HBM, and the
+CPU never touches them. When the proxy posts the real descriptor, the NIC still
+pulls the payload directly out of GPU memory, exactly as in the IBGDA picture. 
+
+There are many warps and few rings, so a warp picks its ring by hashing its
+expert index across the proxy threads and their channels, and if the ring is
+full it spins until the CPU catches up. The structure is the same
+descriptor-queue arrangement the NIC offered, with the doorbell replaced by
+polling: the consumer on the other end is software, watching the ring's head
+pointer instead of waiting for a register write.
+
+The result is that the control path now requires nothing from the NIC at all: a
+write to pinned host memory over PCIe is something every GPU can do. The data
+path still needs one thing from the hardware, the NIC reaching into GPU memory,
+which we'll come back to. But everything else that was hardware-specific has
+moved to the CPU.
+
+## The proxy: GPU-initiated, CPU-executed
+
+The proxy threads on the other end of the rings are started when the buffer is
+initialized: four by default, each owning eight rings[>7]. Each thread spins
+on its rings' head pointers, and the loop it runs is short: read any new
+commands, rehydrate their offsets into addresses in the pre-registered
+regions[>8], build the corresponding descriptors, post them to the NIC, poll
+the completion queue, advance the ring tails.
+
+[>7]: The split balances two scarcities: four threads because driving the NIC
+is CPU work that needs its own cores, and eight rings each so the many
+concurrently-sending warps mostly land on different rings. The mapping of
+transfers to rings is static, the expert index modulo the ring count.
+
+[>8]: Registered once at startup: ranks allocate their regions, then exchange
+addresses and access keys out of band over some coordination mechanism; for
+torch it's the existing process group.
+
+The contract's guarantees now belong to the proxy. The signal-after-data
+ordering holds because the proxy posts a ring's commands to the network in
+ring order, and a queue pair executes its descriptors in that order, so a
+signal posted after its data completes after it[>9]. The quiet holds because
+the proxy refuses to consume a quiet command until the completion queue has
+acknowledged everything it posted before it.
+
+[>9]: There is also a stricter optional mode in which the proxy holds a signal
+back until the completions for its data writes have actually arrived, rather
+than relying on queue-pair order. Queue-pair order only helps when the
+transport executes in order (RC, in verbs terms); on a reliable-but-unordered
+transport like EFA's SRD it guarantees nothing, and this mode is the fallback.
+
+Structurally, the proxy has two halves: a generic front that drains rings and
+tracks completions, and a backend that turns commands into calls on the NIC's
+own API. The backend is the only code in the stack that knows which NIC is
+present.
+
+## Any NIC a CPU can drive
+
+Porting UCCL-EP means writing a new backend for the proxy: the code that turns
+a 16-byte command into network operations. The kernels, the shim, and the
+rings don't change.
+
+What does a backend actually need from its NIC? Happily, much less than in
+IBGDA. Four things, in decreasing order of necessity:
+
+1. **DMA access to GPU memory, in both directions.** On send the NIC reads
+   the payload straight out of HBM; on receive it writes arriving tokens
+   straight into HBM. The command that crossed to the host carried addresses,
+   not data, and this is what keeps the data path off the CPU. The NIC has to
+   accept GPU memory registrations[>10], and this is the one capability with
+   no software substitute.
+2. **A reliable one-sided write.** Bytes delivered to a remote registered
+   address, exactly once, with no remote software involved.
+3. **Completions that imply remote delivery.** The quiet never reaches the
+   wire: the proxy synthesizes it by counting completions. For that to be
+   sound, a completion has to imply that "this write has landed and is readable
+   in remote memory".
+4. **Ordering and atomics, if you can get them.** If the NIC offers ordered
+   connections, the signal-after-data guarantee comes free, as it did on the
+   verbs path. If it offers remote atomics, the signal maps onto one
+   directly. Neither is required: both can be rebuilt in the proxy.
+
+[>10]: Via peer-memory or dmabuf or whatever. See [Building NVSHMEM from Scratch](https://cppcheatsheet.com/notes/blog/nvshmem.html).
+
+UCCL-EP ships proxy backends for AWS's EFA, Broadcom's Thor NICs, AMD's
+Pollara, and NVIDIA's own ConnectX. And because the device side of the
+contract is nothing but writes to host memory, the GPU doesn't need to be
+NVIDIA's either: the same shim compiles under ROCm, which is how the whole
+stack runs on AMD GPUs.
+
+## Performance
+
+The proxy-thread design has some costs. Each message's control information crosses PCIe to
+host memory and waits for a proxy thread to notice it, where IBGDA paid a
+single doorbell write. And the proxies are four pinned CPU threads per GPU,
+spinning. 
+
+But the work the proxy adds is per-command, not per-byte: a fixed cost for the
+host-thread pickup, amortized over however much data the descriptor moves. The
+published numbers[>11] bear this out. On NVIDIA NICs, where the original DeepEP
+is the baseline, UCCL-EP performs comparably, and on a GH200 testbed it comes
+out ahead, which the authors put down to NVSHMEM's own internal overheads. On
+the hardware DeepEP can't reach, the gains are big: up to
+2.1x the dispatch and combine throughput of the best prior EP implementation on
+EFA, 40% more SGLang token throughput on NVIDIA-plus-EFA, and 45% more
+DeepSeek-V3 training throughput on a sixteen-node AMD-plus-Broadcom cluster.
+
+[>11]: From their [paper](https://arxiv.org/abs/2512.19849), the [repo's
+benchmarks](https://github.com/uccl-project/uccl/tree/main/ep), and the
+[announcement post](https://uccl-project.github.io/posts/uccl-ep/).
+
+## Conclusion
+
+So that's UCCL-EP: a clean way to do $m+n$ work and get an EP kernel on all $m
+\times n$ pairs of $m$ accelerators and $n$ NICs. Adding HPE Slingshot support
+to get Isambard serving large expert-parallel models is one more increment of
+$n$, and that work is ongoing.
+
