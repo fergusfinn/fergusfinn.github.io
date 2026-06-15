@@ -7,7 +7,7 @@ pubDate: 'Jun 12 2026'
 coverCredit: '"Office of the American Telegraph Company, Corner of Broadway and
   Liberty Street, New York - Telegrams for Europe," from *Harper''s Weekly*
   (1866), via the [Library of Congress](https://www.loc.gov/pictures/item/2021651463/).'
-index: false
+index: true
 ---
 
 In the [last post](/blog/anatomy-of-a-high-performance-ep-kernel) we looked at
@@ -243,8 +243,9 @@ IBGDA. Four things, in decreasing order of necessity:
 
 [>10]: Via peer-memory or dmabuf or whatever. See [Building NVSHMEM from Scratch](https://cppcheatsheet.com/notes/blog/nvshmem.html).
 
-UCCL-EP ships proxy backends for AWS's EFA, Broadcom's Thor NICs, AMD's
-Pollara, and NVIDIA's own ConnectX. And because the device side of the
+UCCL-EP ships a backend for AWS's EFA and a generic RDMA verbs backend
+covering Broadcom's Thor, AMD's Pollara, and NVIDIA's own ConnectX. And
+because the device side of the
 contract is nothing but writes to host memory, the GPU doesn't need to be
 NVIDIA's either: the same shim compiles under ROCm, which is how the whole
 stack runs on AMD GPUs.
