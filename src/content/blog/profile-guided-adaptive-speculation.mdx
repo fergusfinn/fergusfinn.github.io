@@ -243,15 +243,12 @@ chosen if you knew that exact operating point ahead of time. It does![>_1]
 
 <PricingEnvelope client:load />
 
-[>_1]: Its not really clear here why DFlash is so much more desirable than MTP,
-since we just show global throughput. But note -- DFlash matches the same kind
-of global output throughput at a much lower batch size, which means that a
-smaller number of users get a much faster experience. This is generally much
-harder to achieve. Also, because I don't know where else to put this and I
-think its a cool idea -- the best dynamic policy could switch between the heads
-at runtime! The actual weights of the spec models are pretty small: most of
-them are shared with each other and with the target model (i.e. the vocab
-head).
+[>_1]: TODO: the best dynamic policy could switch between the heads at runtime
+and get the envelope of these curves at the cost of having both weights on disk
+(which i haven't actually checked - does the MTP head always get loaded for
+Qwen with the rest of the weights?). The actual weights of the spec models are
+pretty small: most of them are shared with each other and with the target model
+(i.e. the vocab head).
 
 Which is a good trick. We're doing ISL=1, OSL=1024[>Z], and the simulation is
 kind of oracular (i.e. it knows exactly how long the next step will take for
