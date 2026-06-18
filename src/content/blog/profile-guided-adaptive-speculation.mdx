@@ -314,7 +314,8 @@ $$
 \frac{\sum_i m_i(\gamma)}{C(B, \gamma\mathbf{1})}.
 $$
 
-For per-sequence gating, the object is the vector of depths
+Really you can do better though, since the confidences are per sequence in the
+batch. For per-sequence gating, the object is the vector of depths
 $\mathbf{\gamma} = (\gamma_1,\ldots,\gamma_B)$:
 
 $$
@@ -327,6 +328,9 @@ There's a signal that we could use if we wanted to. Running the simulation
 tells us what that signal could be worth:
 
 <GatingLadder client:load />
+
+Perfect calibration is the case where we give the policy oracle information:
+i.e. it only ever drafts things that it knows ahead of time will be accepted.
 
 So there are big gains at small batch size: where the expert coupon-collector
 makes mis-speculation expensive. And then, as parts of the model go past the
