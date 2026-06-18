@@ -1,483 +1,609 @@
 ---
 title: 'Profile-guided adaptive speculation'
 description: |
-  The cost of a speculated token moves with load, and the drafter's own
-  logprobs tell you which drafts will die. Pricing the draft length per
-  scheduler step, and gating it per sequence, on a real engine.
-pubDate: 'Jun 9 2026'
+  A follow-on to the economics of speculative decoding. That post priced what a
+  speculated token costs to verify and held the drafter cost fixed. This one
+  models the drafter cost, finds it is a different kind of cost, and runs a
+  hardware-grounded feasibility simulation to ask whether adapting pays and what
+  it would take to build.
+pubDate: 'Jun 16 2026'
 stickyToc: true
+index: false
 draft: true
 ---
 
 {/*
-STATUS: Rewrite in progress -- paper-level version.
-
-OUTLINE:
-- [x] Framing: price, don't tune
-- [x] The signal: real MTP traces, confidence -> acceptance
-- [x] Trace-level result (off-policy)
-- [x] The two policies (budget, gated)
-- [x] Simulator results: C1 sweep, C2 envelope
-- [ ] Real engine: implementation note (vLLM patch)
-- [ ] Real engine: C1 matrix + C2 square wave results  <- AWAITING MODAL RUNS
-- [ ] Conclusion
-- [x] Appendix: trace semantics
-- [ ] Appendix: acceptance-EMA baseline port
-- [ ] Appendix: cost-table profiling
-- [ ] Re-prune pass before publishing
+STATUS: Skeleton — section headings only. Feasibility-study framing.
+Model: Qwen3.6-35B-A3B (hybrid GatedDeltaNet + GQA + MoE) as verifier;
+MTP vs DFlash as the two drafters. Matched acceptance banks collected
+(~/inference-lab/data/qwen36_{nextn,dflash}_speedbench_rounds.csv).
+Campaign record: ~/notes/docs/campaigns/adaptive-speculation/.
 */}
 
-The companion post, [the economics of speculative
-decoding](https://fergusfinn.com/blog/economics-of-speculative-decoding/),
-works out what a speculated token costs to verify on a modern MoE model, and
-finds that the answer moves: with batch size, with context length, with where
-the step sits on the roofline. A token that is free to verify at one operating
-point costs nearly full price at another. That post ended with a static
-conclusion, a chart you could read $\gamma^\star$ off, given your operating
-point.
+import DrafterCrossover from '../../components/specdec/DrafterCrossover.tsx'
+import PricingEnvelope from '../../components/specdec/PricingEnvelope.tsx'
+import GatingLadder from '../../components/specdec/GatingLadder.tsx'
+import AcceptanceCurve from '../../components/specdec/AcceptanceCurve.tsx'
+import AcceptLengthHist from '../../components/specdec/AcceptLengthHist.tsx'
+import AcceptJointHeatmap from '../../components/specdec/AcceptJointHeatmap.tsx'
 
-This post takes the next step, and makes the deployment decide for itself. Two
-mechanisms, in increasing order of ambition:
+{/* Intro goes here, no  need for title 0 */}
 
-1. **Price the draft length per scheduler step.** The engine knows its decode
-   batch the instant before the drafter runs. Pricing every candidate draft
-   length through the cost model and keeping the best one replaces the offline
-   $\gamma$ sweep entirely.
+Last [time](https://fergusfinn.com/blog/economics-of-speculative-decoding/) we
+discussed the changing economics of speculative decoding. The strategy for
+getting the most tokens out of a running model has become more complex as the
+"market" for tokens in the running inference engine has become more dynamic. 
 
-2. **Gate each sequence on the drafter's own confidence.** The drafter
-   produces a probability for every token it proposes, and that probability
-   turns out to be a well-calibrated predictor of whether the verifier will
-   keep the token. Sequences whose drafts are going to die shouldn't pay for
-   deep verification; sequences in easy territory should run long. This is a
-   per-sequence, per-step decision, and the signal is free.
+In this post, we want to figure out what the optimal strategy is for
+speculating in a fast-changing environment.
 
-The headline, measured end to end: a single adaptive policy matches the best
-statically-tuned draft length at every steady operating point with no tuning
-at all, beats it by 10--23% at the operating points where verification is
-expensive, and under realistic time-varying load avoids failure modes that no
-static choice can: the best fixed $\gamma$ at one burst intensity is the wrong
-one at another, and the deepest setting quietly starves prefill.
+## First, a new model
 
-Everything below is one model on one GPU: Qwen3.6-35B-A3B (a 35B-total,
-3B-active hybrid: GatedDeltaNet linear-attention layers interleaved 3:1 with
-full GQA attention, MoE on every layer, and a native single-layer MTP head
-that serves as the drafter) on a B200.
+Let's swap the model from the last post, cause why not.
+[Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) is a hybrid
+mixture-of-experts model from the Qwen team. 
 
-## The signal: drafters know when they're guessing
+The expert half is pretty much the same as we worked out for [DeepSeek
+Flash](https://fergusfinn.com/blog/economics-of-speculative-decoding/#the-expert-tax).
+Every layer routes each token to $8$[>1] of $256$ experts plus one shared expert, which
+is the same coupon-collector picture from last time: at small batch each token
+tends to drag in its own fresh experts and amortises almost nothing, and the
+marginal token only rides resident experts for free once the batch size is
+large enough to have triggered most of them.
 
-Speculative decoding already measures everything it needs. Each verification
-step tells you exactly how many drafted tokens survived, and the drafter
-produces a probability for each token it proposes. The question is whether
-that probability is informative enough to act on.
+[>1]: Contrast $6$ of $256$ for Deepseek Flash, the knee when all experts are
+active, such as it is, arrives sooner.
 
-We collected per-token traces of MTP speculation: Qwen3.6-35B-A3B with its
-own MTP head as drafter, running real generation over a benchmark spanning
-eleven domains and context lengths from 1k to 32k, logging for every drafted
-token its draft-time probability and whether the verifier committed it. Two
-datasets: 46k draft rounds at depth 4, and 12k rounds at depth 8 (185k and
-97k drafted tokens respectively).
+The attention half is pretty different. Recent Qwen models have bet on 'hybrid
+attention': mixing both novel linear attention mechanisms (specifically,
+[GatedDeltaNet](https://arxiv.org/abs/2412.06464)) with traditional (GQA)
+attention. Qwen alternates its layers three to one: thirty of the forty are
+GatedDeltaNet linear-attention layers, and only ten are conventional full
+attention[>2]. The result is that the result from last time -- that MLA becomes
+compute bound when speculating -- doesn't apply, both the linear attention and
+GQA layers both have an arithmetic intensity that doesn't saturate at any
+reasonable draft length, so speculation keeps paying for long sequences.
 
-The drafter's confidence predicts acceptance remarkably well[>1]:
+[>2]: This is another path to KV cache compression, different from DeepSeek's
+maybe more ambitious modifications of the standard attention mechanism.
 
-| draft-prob decile | mean draft prob | P(commit) |
-|---:|---:|---:|
-| bottom | 0.23 | 0.135 |
-| 3rd | 0.57 | 0.39 |
-| 5th | 0.86 | 0.62 |
-| 7th | 0.99 | 0.86 |
-| top | 1.00 | 0.935 |
 
-[>1]: AUC 0.91 at the first draft position, 0.81--0.84 at deeper positions.
-Entropy of the draft distribution carries essentially the same signal
-(AUC within 0.01), so the chosen-token logprob, which is the cheapest thing
-to extract, is also sufficient.
+So it comes down to: the expert tax from last time, plus an attention bill that
+is quartered and, for most layers, flat in context. The full roofline maths is
+in the [appendix](#appendix-rooflines-for-the-qwen-model).
 
-A 7× spread in survival probability, visible at draft time, before any
-verification has been paid for. The per-depth acceptance figures usually
-quoted (here: 0.84 at depth one falling to 0.21 by depth eight,
-unconditionally) hide this: conditioned on having survived so far, acceptance
-is nearly flat at ~0.8 per position. What actually varies is *which sequences*
-are in easy territory, and the drafter knows.
+What we've left out, as we did before, is the cost of *producing* the
+speculated tokens.
 
-## What gating is worth, before touching an engine
+## The changing face of speculation
 
-The traces let us answer the value question exactly, with no simulation and no
-engine work. Drafting in the traces was unconditional at fixed depth, and
-committed tokens form a monotone prefix of each round, so any *truncation*
-policy can be evaluated off-policy: truncate a round to length $G$ and it
-commits exactly $\min(\text{actual prefix}, G) + 1$ tokens. We fit the
-confidence-to-acceptance calibration on half the rounds and evaluate policies
-on the other half.
+There are two research threads that have changed how draft models are built:
 
-The objective is committed tokens per unit verify cost, with the cost of a
-round $1 + r \cdot G$: one mandatory token plus $G$ draft slots at marginal
-price $r$. The price $r \in [0, 1]$ is where the companion post's roofline
-analysis enters, summarized in a single number: $r \to 0$ deep in the
-memory-bound region (verification rides along free), $r \to 1$ at the compute
-bound (every verify slot pays full freight).
+One major boost in the performance of draft models has been to condition them
+on richer outputs from the target model. Conditioning eases the training
+objective of the speculator, making higher accept lengths easier to
+achieve[>3]. 
 
-Three policies. The **best fixed $G$** at each $r$, which is what an offline
-sweep gives you, and also what trailing-average acceptance adaptation
-converges to in steady state[>2]. The **gated** policy: extend each round's
-draft while the calibrated survival estimate of the next slot beats the
-marginal price. And the **oracle**: verify exactly the tokens that will
-commit, an upper bound no causal policy reaches.
+[>3]: Conditioning on the hidden states has a drawback though, in that the speculator
+must run in series with the target model (since it needs the hidden states in
+order to run. Generally, hidden states from closer to the end of the speculator
+model are more useful than those from the start, and the speculator can only
+run once they're available). So there's little potential for overlap between
+speculator and target. TODO: Even if there were, the right framing ought to be to
+figure out the opportunity cost of those FLOPs -- for example, if we proposed
+running the draft model asynchronously on another GPU (as in
+[SSD](https://arxiv.org/abs/2603.03251)), we ought to treat the baseline as one
+in which that GPU was used to power inference on the target model via wider TP or something?.
 
-[>2]: This matters for situating the contribution: dynamic draft length per
-se is shipped technology -- sglang's `--speculative-adaptive` adjusts a global
-depth from an acceptance-length EMA with hysteresis. In steady state that
-recovers the best fixed depth for the current workload. What it cannot do is
-distinguish sequences within a batch, or react to the *cost* side (load)
-rather than the acceptance side.
+The other half of the story powering the step change in speculative decoding is
+the hardware sympathy of the drafter.
+[DFlash](https://arxiv.org/abs/2602.06036) makes use of the conditioning on the
+hidden states to make diffusion, which has generally given poor performance for
+pure text generation, work for speculation generation. The drafter workload is
+then much closer to its ridge point, produces its own tokens much faster, and
+the result is higher throughput for the same accept length.
 
-Committed tokens per unit cost on the held-out depth-8 rounds:
+Both factors are driving massive improvements in throughput [>4].
 
-| $r$ | best fixed $G$ | fixed | gated | oracle | gated vs fixed |
-|---:|---:|---:|---:|---:|---:|
-| 0.05 | 8 | 3.26 | 3.48 | 3.88 | +6.6% |
-| 0.10 | 6 | 2.56 | 2.91 | 3.37 | +13.6% |
-| 0.20 | 4 | 1.92 | 2.26 | 2.67 | +17.8% |
-| 0.30 | 3 | 1.59 | 1.89 | 2.21 | **+19.0%** |
-| 0.50 | 2 | 1.25 | 1.47 | 1.64 | +17.8% |
-| 0.70 | 1 | 1.08 | 1.22 | 1.31 | +12.5% |
-| 1.00 | 0 | 1.00 | 1.00 | 1.00 | 0.0% |
+[>4]: See this great
+[work](https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/)
+from the modal, sglang, and z lab teams.
 
-Across the middle of the price range, where the companion post's analysis says
-real deployments of this class of model actually sit, per-sequence gating is
-worth 12--19% over the best fixed draft length, and captures half to
-two-thirds of the oracle headroom. At the extremes the gain vanishes, exactly
-as it should: when verification is free you speculate maximally for everyone,
-when it costs full price you don't speculate at all, and in neither case is
-there a decision left to inform. The gate also *dominates* rather than
-trading off: at $r = 0.3$ it commits more tokens per round than the best
-fixed choice (3.75 vs 3.01) at barely more verify width (4.29 vs 4.0),
-because it spends its width on rounds that survive.
+We discussed last time that there are two costs to pay during speculation: the
+cost of the draft model, and the cost of the verify. We focussed on the cost of
+the verify, and held the draft cost as a constant fraction of the target model.
 
-## The two policies
+This is bad modelling.
 
-Both run at the same point in the engine loop: the end of a scheduler step,
-when the decode batch for the next step is known and the drafter is about to
-run.
+## The drafter has its own roofline
 
-**Budget** (per-step, batch-level). For every candidate depth $G$ from 0 to
-the cap, price a verify of width $1+G$ over the actual decode batch through
-the cost model, and keep
+There are two different kinds of draft models in vogue at the moment.
+
+The [MTP](https://arxiv.org/abs/2412.19437)[>F] head Qwen ships is a single transformer layer that drafts
+autoregressively. To propose a draft of $\gamma$ tokens it runs $\gamma$ times
+in sequence, each pass taking the last token and producing the next, each pass
+a single layer followed by a projection through the $248{,}000$-entry
+vocabulary. So the drafter's cost runs roughly linear in $\gamma$, the
+vocabulary projection is paid $\gamma$ times over.
+
+[>F]: Basically [EAGLE](https://arxiv.org/abs/2401.15077), but pretrained as
+part of the model. Link is to deepseek which introduced doing this at pretrain
+time.
+
+DFlash is an eight-layer block-diffusion model that drafts the whole block of
+$\gamma$ tokens in one forward pass, every position at once. The weights stream
+once, the vocabulary projection runs once over the block, and pushing $\gamma$
+tokens through together instead of one at a time lifts the arithmetic
+intensity, so the drafter runs near its ridge rather than idling on memory.
+
+<DrafterCrossover client:load />
+
+The consequence for speculation is that the drafter is not a fixed tax but one
+whose shape, linear or flat, and whose sign relative to the other head, depend
+on where on the batch axis the engine is sitting.
+
+Drafting against matched prompts at temperature $0.6$, the two heads commit
+almost the same number of tokens per round, a little over three either way,
+with DFlash ahead only on the predictable material and level on everything
+harder.[>10]
+
+[>10]: Matched collection on Qwen3.6-35B-A3B over [SPEED-Bench](https://arxiv.org/abs/2604.09557), roughly thirty
+thousand draft rounds each: MTP commits $3.27$ of $8$ drafted, DFlash $3.37$ of
+$16$, with DFlash $+13$ to $+26\%$ on code, retrieval and prose and
+level-or-behind on QA and high-entropy text. Details in the [acceptance
+appendix](#appendix-acceptance-model-and-trace-provenance).
+
+## A study in simulation
+
+ To find out whether pricing the draft beats tuning it, this kind of cost model
+ has to go inside an engine, with a scheduler, a queue, and a stream of
+ requests that come and go.
+
+I do that in a discrete-event simulator of a vLLM-shaped engine,
+[inference-lab](https://github.com/doublewordai/inference-lab). It's designed
+to split the difference between two different ways of experimenting with
+inference systems. The pen and paper analytics gives a per-step cost but no
+system: no batching, no queueing, no sense of load or data dependence. A real
+engine has all of that, but it also carries confounds that are frustrating to
+litigate case by case. Like boot-to-boot variation in which kernel shapes got
+captured, or CUDA graphs, availability of specific GPU SKUs, &c. &c. 
+
+
+In [inference-lab](https://github.com/doublewordai/inference-lab), each
+scheduler step, a batch is composed from a facsimile of vLLM's scheduler logic
+-- for aggregated, chunked prefill, we do their decode preference scheduling,
+but we also support disaggregated prefill. Then, the simulator prices that
+batch according to the modelling, and increments a timing counter. Then
+eviction, token generation, admission, KV cache management, etc. kick in to
+produce the next step. It's purely [event
+driven](https://en.wikipedia.org/wiki/Discrete-event_simulation), so its really
+fast[>Q].
+
+[>Q]: It also compiles to wasm, so you can do fun stuff like this:
+https://inference-lab.doubleword.ai/.
+
+The idea is, if an idea is right, what could a perfect implementation achieve,
+unconstrained by the difficulty of implementation.
+
+We want to understand what would happen in a real engine. We could just measure
+$\alpha$, the average accepted speculation tokens for a real engine and
+calibrate the simulator from i.i.d. acceptance. Beyond just global acceptance
+though, there are real signals being emitted per draft round -- as an example,
+the logprobs of the drafter can be used to calibrate the size of the
+verification. So really, we need real calibration data. So we run real end to
+end experiments on modal with the model and various drafters, to get banks of
+acceptance rates per position, see the [appendix]].
+
+## The headroom, and where the implementation challenges are
+
+### How to pick a draft length
+
+When we pick a draft length $\gamma$, we're taking a bet: we pay in wall clock
+time to produce and verify $\gamma$ speculated tokens, and get back however
+many the target accepts. The right bet maximises total committed output per
+unit time, which is just steady-state throughput. For one decode step at a
+homogeneous draft depth $g$, the tokens committed are the ones the target
+accepts plus the one it always emits for free, and the time spent is the cost
+of that step, so the quantity to maximise is
 
 $$
-G^\star = \arg\max_G \; \frac{\mathbb{E}[\text{accepted} \mid G] + 1}{C(B, 1 + G, S)}.
+\mathrm{goodput}(\gamma) = \frac{\mathbb{E}[\text{accepted} \mid \gamma] + 1}{C(B, \gamma)},
 $$
 
-The acceptance expectation comes from the measured curve; the cost from the
-roofline model (in the simulator) or a profiled step-time table (on the real
-engine). No sweep, no foresight: the inputs are the batch in hand and a
-running acceptance measurement.
+and each step the policy takes $\gamma^\star = \arg\max_\gamma \mathrm{goodput}(\gamma)$, over
+$\gamma$ from $0$ (don't speculate) up to the drafter's depth.
 
-**Gated** (per-step, per-sequence). Compute each sequence's survival chain --
-the running product of calibrated acceptance estimates from its drafted
-tokens' logprobs -- then allocate draft slots greedily, highest survival
-first, while the marginal slot improves expected committed tokens per unit
-step time. The marginal cost of a slot comes from the same cost curve the
-budget policy prices; the drafter is charged on the deepest draft in the
-batch. A sequence with a confident chain keeps its full depth; a sequence
-whose first draft already looks dead gets a plain decode step. The budget
-policy is the special case where every sequence has the same signal.
+This is basically just the speedup objective from [last
+time](https://fergusfinn.com/blog/economics-of-speculative-decoding/). The
+numerator is the average number of tokens that actually commit at each
+depth[>F]. The denominator is the real roofline cost of the step: the expert
+tax and the hybrid-attention bill for the live batch of $n$ sequences each
+verifying $\gamma+1$ tokens, plus the drafter charged for its $\gamma$ passes. 
 
-## Does it hold up in a full engine loop? (simulation)
 
-Off-policy analysis prices rounds independently with a scalar $r$. A real
-engine couples everything: the roofline prices the whole step, sequences
-share weight and cache transfers, schedulers trim drafts when the token
-budget runs out, prefill competes with verification. Before touching a GPU we
-ran both policies through a discrete-event simulator of a vLLM-style engine
-([inference-lab](https://github.com/doublewordai/inference-lab)) that models
-all of this: the MoE coupon-collector expert loading, the hybrid
-GDN+GQA attention costs, chunked prefill, KV limits, and -- crucially --
-trace-driven acceptance: each simulated decode step draws a *real* round from
-the held-out traces, so the gate sees the true joint distribution of its
-signal and the outcome, including its own calibration error.
+[>F]: We did average out $\alpha_k$ per position (i.e. acceptance rate after
+$1$ token, after $2$ tokens etc.). Turns out we needn't have bothered, and
+$\alpha_k \sim \alpha^k$ pretty closely.
 
-### Steady load
+### Simulated priced $\gamma$ matches best-in-hindsight tuning
 
-Closed-loop concurrency sweep, ~1.1k-token inputs / ~0.9k outputs, output
-tokens per second:
+The first thing to check is whether pricing the draft recovers what hand-tuning
+would. For each concurrency, the best fixed $\gamma$ is the one you would have
+chosen if you knew that exact operating point ahead of time. It does!
 
-| conc | no-spec | best fixed $\gamma$ | budget | gated | gated vs best fixed |
-|---:|---:|:---|---:|---:|---:|
-| 1 | 1,369 | 2,064 (γ3) | 2,064 | 2,496 | **+20.9%** |
-| 4 | 2,697 | 3,198 (γ2) | 3,198 | 3,919 | **+22.6%** |
-| 16 | 4,117 | 8,309 (γ8) | 8,312 | 8,310 | +0.0% |
-| 64 | 7,724 | 29,458 (γ8) | 29,497 | 29,229 | −0.8% |
-| 256 | 19,210 | 63,698 (γ8) | 64,404 | 65,611 | +3.0% |
-| 1,024 | 29,487 | 68,415 (γ6) | 71,567 | 75,674 | **+10.6%** |
-| 4,096 | 30,007 | 68,558 (γ6) | 72,005 | 75,566 | **+10.2%** |
+<PricingEnvelope client:load />
 
-Three regimes, exactly where the cost model puts them. At concurrency 1--4
-the batch sits on the MoE expert-tax shoulder: every verify token drags in
-fresh experts, verification is expensive, and per-sequence gating is worth
-+21--23%. In the memory-bound middle verification is nearly free, every
-policy correctly speculates to the cap, and there is nothing to win -- though
-the gate gets there with ~30% less verify work (at concurrency 16 it chooses
-mean depth 5.7 and matches fixed-8 to four digits)[>3]. Past the compute
-bound the marginal price rises again and the gate is worth +10%.
+Which is a good trick. We're doing ISL=1, OSL=1024[>Z], and the simulation is
+kind of oracular (i.e. it knows exactly how long the next step will take for
+all the parameters it can set).
 
-[>3]: The −0.8% at concurrency 64 is the cost of estimating the marginal
-price by interpolating the homogeneous cost curve at the mean verify width;
-convexity makes that a slight overestimate when most sequences run deep and a
-few are truncated, so the gate trims a handful of slots that were actually
-free. Half a percent seems a fair price for a policy that needs no
-per-sequence cost evaluation.
+This is nice! if we build this speculation policy perfectly, then you never
+mistune your speculation $\gamma$ against the workload. You can run your
+inference setup for latency at some fixed batch size, then, during user down
+time, for load shifting, run at high batch size, dropping user TPOT in exchange
+for global throughput. Then, with real-time user load, you can scale
+immediately back down, without restarting or re-tuning.
 
-The budget column is the no-tuning claim: at every operating point it sits on
-the best fixed value, found by reading the batch, not by sweeping. Its gains
-over best-fixed at 1,024+ come from mixing depths across steps as the decode
-batch composition shifts, something a single $\gamma$ cannot do.
+[>Z]: Chunked prefill adds some interesting quirks, since you have to figure
+out how to tradeoff additional speculation vs. additional prefill chunks (which
+are required, in order for requests to progress into the decode phase). ISL=1
+OSL=1024 is the disaggregated prefill setup, i.e. assume a perfectly paced and
+scaled prefiller on separate GPUs.
 
-### Time-varying load
 
-Steady-state sweeps understate the case for adaptivity, because a deployment
-doesn't get to pick its operating point. We drove the simulated engine with a
-square-wave load: 300-second bursts at rate $\lambda$ alternating with
-300-second troughs at 2 requests/s (decode batch of 1--4, the expensive
-shoulder), and swept the burst intensity. Burst-window e2e p99 (seconds) and
-trough-window mean TPOT (milliseconds):
+### Heterogeneous draft lengths: gating on confidence
 
-| burst $\lambda$ (req/s) | best fixed | budget | gated |
-|---:|:---|:---|:---|
-| 60 | γ8: 9.3 s / 1.04 ms | 9.3 / 0.90 | 9.4 / **0.65** |
-| 130 | γ4: 20.8 s / 0.98 ms | 26.9 / 0.94 | 22.7 / **0.68** |
-| 200 | γ2: 108 s / 0.86 ms | 139 / 0.85 | **107** / **0.61** |
+The priced policy so far answers the same for the whole batch: under the global
+average acceptance curve, what single draft depth maximises goodput. The number
+of committed tokens is not clustered around the mean, but more like
+all-or-nothing. On a given round the drafter tends to be right about almost
+everything it drafts or wrong almost at once. The average hides some interesting
+shape. Rounds are mostly 'near-misses' or 'clean sweeps':
 
-Read the "best fixed" column first: it's a different $\gamma$ at every burst
-intensity (8, then 4, then 2). The operator who tuned at one traffic level
-holds the wrong setting at the next. The gated policy tracks each point's
-envelope within 9% without being told the traffic level, beats every fixed
-setting outright once the bursts genuinely overload the engine, and wins
-every trough by ~30% on per-token latency -- the regime where an interactive
-user is actually watching tokens arrive.
+<AcceptLengthHist client:load />
 
-One failure mode deserves its own sentence. Fixed $\gamma = 8$ -- the setting
-a closed-loop throughput benchmark at high concurrency would recommend --
-posts a time-to-first-token p99 of *14 seconds* during moderate bursts
-(adaptive: 0.12 s), and 181 seconds at high intensity. Deep static drafts eat
-the token budget that chunked prefill needs, and arriving requests queue
-behind speculation that mostly gets rejected. None of the adaptive policies
-exhibit this, not because they were designed to protect prefill, but because
-the verify width they buy is priced, and at those operating points deep
-drafts don't pay.
+i.e. both kinds of drafters have a spike at their max committed tokens. (TODO:
+is this spike just the integral of like a fitted curve past the max off to
+infinity?)
 
-The chosen depth, watched over a burst cycle, is the whole mechanism in one
-trace: mean draft length ~7 during the burst (batch ~600, memory-bound,
-verification cheap), dropping to ~3 in the trough (batch ~2, expert tax,
-verification dear) -- with the per-sequence spread inside each step doing the
-fine adjustment.
+A single depth has to compromise
+between those two populations, deep enough to cash in the easy rounds, shallow
+enough not to verify the hard ones into the ground.
 
-## On real hardware
+Happily, the drafter has an opinion about which kind of round it is before the
+verifier runs. Plot the cumulative product of its per-depth confidences, against
+the length that actually committed. Diagonals are 'perfectly calibrated': i.e.
+the empirical accepted tokens at that length is the same as the confidence
+derived from the drafter logprobs. Below the diagonal, the drafter was
+overconfident, above, not confident enough.
 
-The simulator's cost model is a roofline, and rooflines are polite fictions.
-The real test is the same policies inside a production engine, with all the
-machinery the simulator abstracts away: CUDA graphs, chunked prefill,
-streaming, scheduler overheads, and an MoE dispatch whose cost structure is
-whatever it is rather than whatever we modelled.
+<AcceptJointHeatmap client:load />
 
-**Implementation.** All four policies run as a ~300-line plugin on stock vLLM
-v1 (no fork, no rebuild), loaded through the engine's plugin mechanism so it
-reaches the process that owns the model. vLLM v1 turns out to be
-structurally ready for per-sequence draft lengths: the rejection sampler
-already takes a per-request draft count, and the scheduler already truncates
-each request's proposed draft list. The plugin intercepts exactly one seam --
-the moment the proposed drafts leave the model runner for the scheduler --
-and shortens each request's list according to the policy. The drafter's
-chain logprobs are captured during drafting (one extra log-softmax per draft
-step in this prototype; a production version would fuse the gather into the
-draft sampler). Fixed-$\gamma$, acceptance-EMA, budget, and gated are then
-the same code path with different keep-length functions, which is the
-fairness property the comparison needs[>4].
+Write round $i$'s expected committed tokens at depth $g$ from its own per-depth
+confidences $a_k^i$,
 
-[>4]: Two honesty notes. The fixed-$k$ arms truncate an 8-deep drafter
-rather than configuring a $k$-deep one, so they pay the full drafter cost a
-native deployment wouldn't; the vanilla arm (no truncation) and the no-spec
-arm are native. And the gated arm carries its logprob-capture overhead in
-every number reported.
+$$
+m_i(g) = 1 + \sum_{d=1}^{g} \prod_{k=1}^{d} a_k^i .
+$$
 
-**The cost model is a table, not a formula.** Instead of porting the
-roofline, the cost input to the budget and gated policies is profiled on the
-target itself: a calibration pass sweeps decode batch size and verify width
-and records the median wall-clock gap between engine steps -- not the model
-forward time, the whole step. This distinction earned its keep twice. In
-eager mode, forward-only timings said a verify slot was nearly free while
-realized step costs said width 9 cost twice width 3 (the difference living
-in drafter catch-up, rejection sampling, and host dispatch between
-forwards). And under CUDA graphs, truncating a draft turns out to carry a
-real cost of its own: the engine captures full graphs for the vanilla verify
-shape, and a truncated batch falls off the fast path. Because the
-calibration runs through the same truncation machinery as the policies, that
-implementation tax lands *inside* the measured $C(B, g)$, and the policies
-only truncate where it pays net of the engine's actual warts. A modelled
-cost would have confidently recommended truncations that lose money; the
-profiled one cannot, by construction.
+The homogeneous policy averages these into one curve and maximises once,
+$\;g^\star = \arg\max_g \big(\tfrac1B\sum_i m_i(g)\big)/C(g)$. Gating maximises
+inside the sum, letting each round keep its own depth,
+$\;g_i^\star = \arg\max_g m_i(g)/C(g)$. 
 
-### What the engine taught us before any numbers
+There's a signal that we could use if we wanted to. Running the simulation
+tells us what that signal could be worth:
 
-Three facts about adaptive speculation on a production engine, none of which
-the simulator -- or any roofline -- predicts, all of which we measured the
-hard way:
+<GatingLadder client:load />
 
-1. **There is a cliff, and it moves.** vLLM captures full CUDA graphs for
-   batches up to a token budget set by *free GPU memory at boot*. A verify
-   batch that crosses it falls off the fast path and step time roughly
-   triples. On one container, vanilla $\gamma{=}8$ at concurrency 64 (576
-   verify tokens) cleared the budget and won; on another boot of the *same
-   image on the same GPU type*, it fell over the edge and ran *slower than
-   no speculation at all*. The optimal fixed draft length is not even a
-   property of (model, GPU, workload) -- it depends on how much graph memory
-   that particular boot got.
+So there are big gains at small batch size: where the expert coupon-collector
+makes mis-speculation expensive. And then, as parts of the model go past the
+compute bound cliff, there are gains from acceptance gating, since speculation
+now only wins in those parts of the model that are compute bound. The
+batch-averaged signal washes out as the batch size increases -- i.e, you can't
+adaptively choose a global $\gamma$ from the confidences -- because the larger
+batch is more heterogeneous.
 
-2. **The cost of a width is a property of the width sequence.** Steady
-   width-9 decode steps cost 10.9 ms at batch 1 on our reference container;
-   an isolated width-9 step sandwiched between width-8 steps costs ~18 ms.
-   Changing shape pays a transition penalty. This breaks naive measurement
-   (a single-step exploration probe mis-prices the width it probes) and
-   naive policies (a per-sequence gate at batch 1 changes shape nearly
-   every step and bleeds the penalty continuously). Our cost learner only
-   accepts samples from runs of three or more same-shape steps, and the
-   budget policy explores in held blocks and switches widths with
-   hysteresis -- not for stability, for *cost*.
+## What to build
 
-3. **Truncation itself is taxed, asymmetrically.** Keeping all 8 drafts is
-   a no-op that leaves the engine's fast path untouched; keeping 7 is a new
-   shape. So $C(B, 8) < C(B, 7)$ -- cost is genuinely non-monotone in draft
-   length, and an early version of our learner that assumed monotonicity
-   poisoned its own fast-path estimate with taxed samples and walked away
-   from the optimum.
+To make it real, you have to figure out how to build this policy in real time.
+There are a couple of issues:
 
-Each of these went into the policy as a constraint the profiled cost table
-either encodes (the cliff, the truncation tax) or that the learning
-machinery respects (steady-state-only samples, block exploration, sticky
-switching). None of them could have been written down from first principles
-before touching the engine, which is the strongest form of this post's
-argument: the cost side of speculation has to be *measured on the
-deployment*, continuously.
+1. **You don't know $\alpha_k^i$**. This one's pretty easy - you just do an EMA
+   estimate of the target acceptance rate over time, or use the drafter
+   confidence.
+2. **You don't know $C$**. This ones much harder. You can just use the roofline
+   model - since hopefully, the performance in the real engine is at least
+   correlated with the modelled performance, you can pick max $\gamma$ from max
+   modelled $\gamma$ without going too far off-policy. You can also build a
+   model of the real engine on real hardware, pointwise with batch size,
+   $\gamma$, either online EMA or with a profiling step. 
 
-### Steady-state results
+Once you've done that what do you get? Several things:
 
-> **[TABLE: canonical 9-arm single-container C1 -- splice when run lands]**
+1. For homogeneous workloads: you don't ever have to tune the speculation
+   length, and so speculation can be enabled by default. 'Configuration tax' is
+   a real thing in inference engines: no matter what features you add to push
+   performance, they're useless unless people can find and enable them, and
+   even AI coding agents aren't very good at [doing
+   that](https://inferencebench.ai/).
+2. There's something like a ~10-30% throughput win at various operating points
+   by picking $\gamma_i$ dynamically per sequence, based on a cost model and
+   drafter confidence -- provided already by existing models.
+3. There's a win across the board for heterogeneous, bursty, dynamic workloads.
+   If your system lives between two operating points (i.e. half at concurrency
+   $1024$, half at concurrency $128$), any static $\gamma$ will be mistuned.
+   Even better, you can use the dynamism you've afforded yourself to accept
+   more flexible workloads: switch the same deployment from [Claude fast
+   mode](https://code.claude.com/docs/en/fast-mode) to regular speed just by
+   increasing batch size, without having to relaunch or reconfigure how you're
+   doing speculation.
+   
+It's gonna be hard to build though. The benefit of simulation is you don't have
+to think about implementation difficulty, the drawback is you haven't thought
+about implementation difficulty. If you can run speculation at any static
+length up to $\gamma_\mathrm{max}$, you need to figure out how to do CUDA
+graphs for each speculative shape. If you want the wins from ragged $\gamma_i$,
+your engine needs to be able to efficiently raggedly speculate. Estimators need
+to be updated online, accurately, account for hysteresis, outliers, warmups,
+JIT compilation, etc. Plus, in the model I've picked here, speculation has some
+gnarly complications: rewinding linear layers when you mis-speculate is
+impossible[>E].
 
-The shape of the result, established across five independent containers:
-speculation pays everywhere under CUDA graphs (vanilla $\gamma{=}8$ beats
-no-spec by +55--60% at low and mid concurrency -- and recall the eager-mode
-appendix, where the same comparison *inverts*). Where vanilla is optimal,
-the budget policy rides it (its vanilla-guard prices the no-op fast path
-explicitly); where this boot's cliff or the load pushes the optimum down,
-the online learner finds the truncation that static configuration cannot:
-on a cliff-exposed container, budget beat vanilla by **+55% at concurrency
-64** and +21% at 256, in the same run that cost it 8--17% at the
-concurrencies where exploration bought nothing. The acceptance-EMA
-baseline, which is healthy acceptance-side adaptation, loses ~30--40% at
-small batch on every container we ran: acceptance tells it to sit at tier 3
-while the cost structure makes deep drafts free. Cost-blindness is not a
-strawman; it is the shipped state of the art.
+[>E]: Some nice work on making this easier: https://dao-lab.ai/blog/2026/replayssm/
 
-### Per-sequence gating, honestly
+But, on the balance of the simulation evidence at least, its worth it. 
 
-The trace analysis says per-sequence gating is worth 12--19% over any
-single depth; the batch-coupled simulator agrees (+10--23% at the expensive
-ends of the roofline). On the real engine, the prototype captures this only
-where CUDA-graph bucket padding absorbs per-sequence width variation (+9%
-over vanilla at concurrency 256 on a non-cliff container) and loses
-elsewhere to the shape-transition tax that per-sequence freedom maximally
-provokes. With the capture overhead measured at a uniform 4--5% (ablation:
-vanilla with and without logprob extraction), the accounting is clear: the
-*signal* is real and free, the *allocation mechanism* is what today's
-engine taxes. The feature this motivates is first-class ragged verification
--- per-sequence draft lengths as a supported shape, not a fallback -- and
-until then the production policy is the homogeneous budget with the gate's
-machinery held in reserve.
+## Appendix: Rooflines for the Qwen model
 
-### Time-varying load
+Everything here is Qwen3.6-35B-A3B. The expert term the same as [last
+time](https://fergusfinn.com/blog/economics-of-speculative-decoding/#the-expert-tax):
+coupon-collector routing, $k=8$ of $E=256$, knee at $E/k=32$. The
+attention is where the model differs.
 
-> **[PENDING: C2 square-wave results -- splice when run lands]**
+The ten full-attention layers behave in the standard attention way. They are
+grouped-query[>5], and the KV cache is re-read on every decode step and grows
+linearly with context. So the arithmetic intensity of the standard attention
+layers goes as $\sim 8T$, with $T$ the verify length.
 
-## Conclusion
+[>5]: $16$ query heads, $2$ key/value heads, head dimension $256$
 
-> **[PENDING -- after real results]**
+The thirty linear layers do not keep a growing cache at all. A GatedDeltaNet
+layer carries a fixed-size recurrent state, a small matrix per head[>6] that it
+updates in place as it consumes each token[>7]. The state summarises the whole
+history in constant space, so there is nothing that grows with context to
+re-read. Across the thirty layers that state comes to roughly 33 megabytes per
+sequence, re-read every decode step no matter how long the sequence is.
 
-## Appendix: trace semantics and the off-policy evaluation
+[>6]: 128 by 128, across 32 value heads
 
-The traces log, for every drafted token, the tuple (config, domain, depth,
-draft logprob, draft entropy, committed). The committed bit comes from the
-verifier's output: in vLLM's rejection sampler the sampled-token tensor
-carries a placeholder after the first rejection, so "committed" at depth $d$
-is the *unconditional* event that the round's surviving prefix reached depth
-$d$. Per-round commits are therefore a monotone prefix (we verified this
-holds for 100% of reconstructed rounds), conditional per-position acceptance
-is the ratio of adjacent unconditional rates (~0.8, nearly flat in depth),
-and truncation policies can be evaluated exactly: a round truncated to $G$
-commits $\min(\text{prefix}, G) + 1$.
+[>7]: GatedDeltaNet is a gated form of the delta rule: each token writes a
+rank-one update into the state and a gate sets how fast old memory decays. At
+decode it runs as a constant-work recurrence, which is why its cost does not
+grow with context.
 
-Rounds are reconstructed from row order (drafting was unconditional at fixed
-depth, so rows cycle through depths within each generation call). The
-calibration -- 20 quantile bins of draft probability for pooled conditional
-acceptance, with a per-depth multiplicative correction -- is fit on a random
-half of rounds; every number quoted is measured on the other half.
+Those two facts set up a crossover with no analogue in a pure-attention model.
+At short context the fixed $33$ megabytes of recurrent state dominate the
+attention-memory bill, and the growing KV cache of the ten full-attention
+layers only overtakes it past about $1,600$ tokens of context. Below that, the
+cost of attending is essentially context-independent; above it, the bill still
+climbs, but on only a quarter of the layers, so it climbs four times more
+slowly than the dense-attention intuition suggests.
 
-## Appendix: the acceptance-EMA baseline
+### The full-attention layers (ten of forty)
 
-The strongest shipped point of comparison is sglang's `--speculative-adaptive`:
-a global draft depth driven by an exponential moving average of accepted
-length, with hysteresis over a tier list. We ported it faithfully into the
-same engine and hook point as our policies (EMA $\alpha=0.2$, one update
-every 5 verifies after a 10-verify warmup, tiers $\{1, 3, 7, \gamma_{\max}\}$,
-down-hysteresis $-0.25$): the depth drops to the tier below when the EMA
-falls more than 0.75 below it, rises when it clears the current tier minus
-0.5. Two structural limits follow from its design, independent of tuning: it
-has one depth for the whole batch, so it cannot exploit the 7× per-sequence
-acceptance spread the drafter exposes; and it reads only the acceptance side
-of the trade, so a load swing that doubles the price of a verify slot without
-changing acceptance is invisible to it.
+These are ordinary softmax attention, so last post's arithmetic-intensity model
+applies. For $T$ verify tokens over $S$ context tokens,
 
-## Appendix: the eager-mode ablation
+$$
+\mathrm{AI} = \frac{f\,T S}{m_c\,S + m_q\,T},
+$$
 
-We first brought the engine up with CUDA graphs disabled (`enforce_eager`),
-and the resulting dataset is worth keeping because it shows how completely
-the host can invert the economics. In eager mode the engine is
-host-overhead-bound: a decode step costs ~36--50 ms nearly independent of
-batch size, but realized serving cost still scales hard with verify width
-(at batch 1, ~49 ms at width 3 vs ~105 ms at width 9 -- the growth living in
-eager MoE dispatch, drafter catch-up, and rejection sampling rather than in
-FLOPs or bytes). Under that regime *shallow speculation dominates
-everything*: fixed $\gamma{=}2$ beats both vanilla $\gamma{=}8$ and
-no-speculation by 35--55% at every concurrency we measured, and the
-acceptance-EMA adapter -- which correctly observes that acceptance is healthy
-and sits deep -- loses ~30% to fixed-2 while being right about acceptance.
-Same model, same GPU, same drafter; flip one engine flag and the optimal
-draft length moves by 4x and the failure mode of acceptance-only adaptation
-flips sign. We can't think of a cleaner argument that draft-length policy
-must read the cost side from the deployment itself.
+with $f$ the FLOPs per query-context pair, $m_c$ the bytes read per context
+token, and $m_q$ the bytes per query token. The layers are grouped-query
+($n_h = 16$ query heads, $n_\text{kv} = 2$ key/value heads, head dimension
+$d = 256$), and Qwen is not trained for an fp8 cache, so KV stays in bf16
+($b_\text{kv} = 2$) or we pay an accuracy cost:
 
-## Appendix: where this analysis is thinnest
+$$
+f = 4\,n_h d = 16{,}384, \qquad
+m_c = 2\,n_\text{kv}\,d\,b_\text{kv} = 2048\ \text{bytes}, \qquad
+m_q = n_h\,d\,b_q .
+$$
 
-- **Acceptance is assumed independent of batch size.** Acceptance was
-  measured once and composed with cost models that vary load. Nothing in the
-  literature suggests batch-coupled acceptance, but we did not measure it.
-  (Acceptance *did* transfer cleanly across datasets: the SPEED-Bench prior
-  predicted ultrachat's realized committed-per-step within 2%.)
-- **One model, one drafter, one temperature.** The calibration's shape
-  (monotone, near-calibrated) is what the gate needs; its portability across
-  model families is untested.
-- **The simulator's cost model is a roofline, and rooflines are
-  shape-blind.** The simulator reproduced fixed-γ orderings and located the
-  gating wins, but it models a step's cost as a function of its contents,
-  not its history. The real engine's two largest effects -- the per-boot
-  graph-capture cliff and the shape-transition penalty -- are invisible to
-  it, and both moved results by more than the effects it does model. This
-  is an argument for the profiled/online cost path, not against simulation:
-  the simulator answers "is the policy worth building"; only the deployment
-  answers "what does it earn here."
-- **Fixed-γ baselines truncate an 8-deep drafter.** A native fixed-k server
-  would pay k drafter passes, not 8. The vanilla and no-spec arms are
-  native; the fixed-2/4 arms carry the extra drafter cost, which flatters
-  the adaptive arms slightly in comparisons against fixed-2/4 (but not
-  against vanilla, the strongest static baseline in most regimes).
-- **Single-GPU, single-node.** Expert-parallel deployments change the MoE
-  cost structure (the companion post discusses how); the policies' inputs
-  would need re-profiling there, which is rather the point.
+At decode the KV read dominates the denominator ($m_c S \gg m_q T$), so the
+intensity rises with context to the plateau
+
+$$
+\mathrm{AI} \to \frac{f\,T}{m_c} = \frac{2\,n_h}{n_\text{kv}\,b_\text{kv}}\,T = 8\,T .
+$$
+
+Against a B200's bf16 ridge of $\approx 281$ these layers stay memory-bound
+until $T \approx 35$. That is the difference from last post's MLA, which crossed
+the ridge at $T = 2$: on grouped-query attention a speculated token is close to
+free for any draft length we would use, and paid on only a quarter of the
+layers.
+
+### The GatedDeltaNet layers (thirty of forty)
+
+Per layer, there is fixed state and per-token recurrence over it.
+The state $K^\top V$ is a $d_k \times d_v$ matrix per value head, read and
+updated once per step:
+
+$$
+m_\text{state} = n_v\,d_k\,d_v\,b_\text{state} = 32 \cdot 128 \cdot 128 \cdot 2
+\approx 1.0\ \text{MB per layer},
+$$
+
+independent of $S$. The compute is the gated delta-rule update plus the
+read-out:
+
+$$
+f_\text{rec} = c\,n_v\,d_k\,d_v \quad \text{per token}, \qquad c \approx 8\ \text{FLOPs},
+$$
+
+counting the rank-one write $\beta\,v k^\top$, the delta correction
+$\beta\,k(k^\top S)$, and the output $o = S^\top q$ (the exact constant follows
+from the GatedDeltaNet update equations). The intensity is the ratio,
+
+$$
+\mathrm{AI}_\text{gdn} = \frac{f_\text{rec}\,T}{m_\text{state}} =
+\frac{c}{b_\text{state}}\,T = 4\,T,
+$$
+
+with no $S$ in it. 
+
+### What the two share, and where they part
+
+For speculation, it works out the same: both layers amortise a per-sequence
+memory read over verify width $T$. Softmax amortises the KV read, GatedDeltaNet
+the state read, and in both the intensity is proportional to $T$, so a wider
+draft buys more compute per byte moved. Neither intensity falls with context
+either, the softmax one rises with $S$ towards $8T$ and the linear one sits
+flat at $4T$.
+
+The difference is the maintained state. Per sequence the attention-memory read
+per step for Qwen-35b-a3b is:
+
+$$
+m(S) = \underbrace{20{,}480\,S}_{\text{full-attn KV}} +
+\underbrace{33.4\times10^6}_{\text{GDN state}}\ \text{bytes},
+\qquad
+S^\star = \frac{33.4\times10^6}{20{,}480} \approx 1{,}600\ \text{tokens}.
+$$
+
+Below $S^\star$ the fixed GatedDeltaNet state dominates the read; above it the
+dense-attention model does. Either way the attention side of this model barely
+resists speculation. What resists it is the expert tax, and the drafter.
+
+## Appendix: the drafter roofline
+
+The verifier appendix priced what it costs to *check* a speculated token. This
+prices what it costs to *produce* one, and it is the cleaner of the two pictures
+because both drafters reduce to one object: the output projection. Qwen3.6's
+hidden width is $d = 2{,}048$ and its vocabulary is $V = 248{,}320$, so the
+projection (tied to the input embedding) is
+
+$$
+P_\text{head} = d\,V = 2{,}048 \times 248{,}320 \approx 0.509\ \text{billion params}
+= 1.02\ \text{GB at bf16}.
+$$
+
+That is larger than anything else either head touches, and the entire contrast
+between the two drafters is how many times each one pays to read it.
+
+### MTP
+
+The MTP head is a single decoder layer: an EAGLE-style $2d \to d$ fusion
+projection, grouped-query attention ($\approx 18.9$ M params, the same per-layer
+figure as the verifier's full-attention layers), and the layer's MoE MLP
+($\approx 28$ M active), for a layer weight of $P_\ell \approx 0.056$ B. It
+drafts autoregressively: a draft of $\gamma$ tokens is $\gamma$ forward passes in
+series, one token produced per pass. Each pass streams the layer *and* the head,
+$P_\text{MTP} = P_\ell + P_\text{head} \approx 0.565$ B, and carries only the $B$
+tokens of the decode batch (one per sequence), so its arithmetic intensity is
+
+$$
+\mathrm{AI}_\text{MTP} = \frac{2\,P_\text{MTP}\,B}{2\,P_\text{MTP}} = B,
+$$
+
+just the batch size. Below the B200 bf16 ridge of $\approx 281$ the weight read
+dominates, and the cost of a $\gamma$-deep draft is
+
+$$
+t_\text{MTP}(\gamma, B) =
+\gamma \cdot \max\!\left(\frac{2\,P_\text{MTP}\,B}{\text{peak}},\ \frac{2\,P_\text{MTP}}{\text{BW}}\right)
+\;\xrightarrow[\,B \ll 281\,]{}\;
+\gamma \cdot \frac{1.13\ \text{GB}}{8\ \text{TB/s}} = \gamma \times 141\ \mu\text{s}.
+$$
+
+Linear in $\gamma$. The vocabulary projection is re-read on every one of the
+$\gamma$ passes, because the tokens are produced one at a time and a single token
+can never amortise a weight sweep.
+
+### DFlash
+
+DFlash is an eight-layer block-diffusion drafter. Its layers are dense (SwiGLU
+width $6{,}144$, grouped-query attention with $32$ query and $4$ key/value
+heads), so the eight come to $\approx 0.45$ B, and a small fusion that ingests
+hidden states from five of the target's layers ($5 \times 2048 \to 2048$) adds
+another $\approx 0.02$ B. It carries no head of its own either, borrowing the
+target's, so $P_\text{DF} = 0.47\,\text{B} + P_\text{head} \approx 0.98$ B. It
+drafts the whole block of $\gamma$ tokens in one forward pass, every position at
+once, so the weights stream a single time and $B\gamma$ tokens ride that one read:
+
+$$
+\mathrm{AI}_\text{DFlash} = \frac{2\,P_\text{DF}\,B\gamma}{2\,P_\text{DF}} = B\gamma,
+\qquad
+t_\text{DFlash}(\gamma, B) =
+\max\!\left(\frac{2\,P_\text{DF}\,B\gamma}{\text{peak}},\ \frac{2\,P_\text{DF}}{\text{BW}}\right).
+$$
+
+At decode ($B = 1$) the block does not cross the ridge until $\gamma \approx 281$,
+so the read dominates for every depth one would ever draft and the cost is
+
+$$
+t_\text{DFlash}(\gamma, 1) \approx \frac{1.96\ \text{GB}}{8\ \text{TB/s}} \approx 245\ \mu\text{s},
+$$
+
+flat in $\gamma$. 
+
+## Appendix: acceptance model and trace provenance
+
+Acceptance numbers in the post come from real draft rounds.The banks were
+collected by running Qwen3.6-35B-A3B (on modal) as the target with the native
+one-layer MTP head and DFlash, over
+[SPEED-Bench](https://arxiv.org/abs/2604.09557) at temperature $0.6$, and
+logging every speculation round.
+
+A round records two things together. The first is the drafter's own per-depth
+confidence, read off its draft-time logprobs. The second is the outcome, the
+number of tokens the target actually committed that round.
+
+First: how many tokens get accepted? On a log axis a single $\alpha^k$ is a
+straight line, so the bend in each measured curve is its distance from
+geometric: both decay faster than geometric early, and DFlash's deep tail is
+heavier than geometric, not lighter.
+
+<AcceptanceCurve client:load />
+
+## Appendix: model and drafter configs
+
+### Verifier
+
+[Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B):
+3:1 standard/linear pattern, 10 GQA full-attention and 30
+  [GatedDeltaNet](https://arxiv.org/abs/2412.06464) linear; every layer MoE
+  ($256$ routed $+ 1$ shared, $8$ per token); hidden $2048$, vocab $248{,}320$;
+  bf16 weights and KV.
+
+### Drafters
+
+Both use to the target's $0.509$ B vocab head rather than shipping their own.
+
+| | [MTP](https://arxiv.org/abs/2412.19437) | [DFlash](https://huggingface.co/z-lab/Qwen3.6-35B-A3B-DFlash) |
+|---|---|---|
+| Drafter | autoregressive, 1 MoE layer + EAGLE fusion ($\approx 56$ M active) | block-diffusion, 8 dense SwiGLU-$6144$ layers + 5-layer fusion ($\approx 474$ M) |
+| Draft | $\gamma$ tokens over $\gamma$ passes | a fixed $16$-block, one pass (TODO: could also consider block size $8$?)|
+| Streamed per pass | $\approx 0.564$ B, head re-read each pass, + coupon experts | $\approx 0.983$ B, head read once |
+
+### Hardware
+
+One B200, TP1/EP1: bf16 $2.25$, fp8 $4.5$, fp4 $9.0$ PFLOP/s; $8$ TB/s HBM; $192$ GB.
+
+### Experiments
+
+The two figures in *The headroom* are closed-loop sweeps over one setup:
+decode-only (ISL $1$, OSL $1024$, so prefill is disaggregated), a single request
+size, concurrency $1$ to $2048$ in powers of two, fixed seed. Acceptance is
+replayed from the banks above, one round per decode step, so it carries the real
+per-round variation rather than a single $\alpha$.
+
+The first sweep pits the best fixed draft length, chosen by simulating the e2e
+benchmark at every $\gamma$ and picking the best in hindsight, against the
+priced policy run once choosing live. The second takes that priced policy as a
+baseline and adds the confidence signal in steps: one verify width for the
+whole batch, then a width per sequence, then the same allocation handed the
+true accept pattern instead of the confidence (the oracle). The code and the
+banks are in [inference-lab](https://github.com/doublewordai/inference-lab).
+TODO: put the data somewhere
