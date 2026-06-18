@@ -68,7 +68,7 @@ reasonable draft length, so speculation keeps paying for long sequences.
 maybe more ambitious modifications of the standard attention mechanism.
 
 
-So it comes down to: the expert tax from last time, plus an attention bill that
+So for Qwen, it comes down to: the expert tax from last time, plus an attention bill that
 is quartered and, for most layers, flat in context. The full roofline maths is
 in the [appendix](#appendix-rooflines-for-the-qwen-model).
 
@@ -298,36 +298,30 @@ overconfident, above, not confident enough.
 
 <AcceptJointHeatmap client:load />
 
-Write round $i$'s expected committed tokens at depth $g$ from its own per-depth
+Write round $i$'s expected committed tokens at depth $\gamma$ from its own per-depth
 confidences $a_k^i$,
 
 $$
-m_i(g) = 1 + \sum_{d=1}^{g} \prod_{k=1}^{d} a_k^i .
+m_i(\gamma) = 1 + \sum_{d=1}^{\gamma} \prod_{k=1}^{d} a_k^i .
 $$
 
 The homogeneous policy constrains the whole batch to one depth and maximises
 once,
 
 $$
-g^\star =
-\arg\max_g
-\frac{\sum_i m_i(g)}{C(B, g\mathbf{1})}.
+\gamma^\star =
+\arg\max_\gamma
+\frac{\sum_i m_i(\gamma)}{C(B, \gamma\mathbf{1})}.
 $$
 
-For per-sequence gating, the honest object is the vector of depths
-$\mathbf{g} = (g_1,\ldots,g_B)$:
+For per-sequence gating, the object is the vector of depths
+$\mathbf{\gamma} = (\gamma_1,\ldots,\gamma_B)$:
 
 $$
-\mathbf{g}^\star =
-\arg\max_{\mathbf{g}}
-\frac{\sum_i m_i(g_i)}{C(B, \mathbf{g})}.
+\mathbf{\gamma}^\star =
+\arg\max_{\mathbf{\gamma}}
+\frac{\sum_i m_i(\gamma_i)}{C(B, \mathbf{\gamma})}.
 $$
-
-That cost does not decompose by sequence. MoE expert residency is
-coupon-collected across the batch, attention and recurrent-state reads are
-shared scheduler-step costs, and DFlash still pays the fixed block even when the
-verify is shallow. So the simulator prices the whole vector, not an independent
-$m_i(g)/C(g)$ decision per row.
 
 There's a signal that we could use if we wanted to. Running the simulation
 tells us what that signal could be worth:
@@ -385,8 +379,8 @@ graphs for each speculative shape. If you want the wins from ragged $\gamma_i$,
 your engine needs to be able to efficiently raggedly speculate. Estimators need
 to be updated online, accurately, account for hysteresis, outliers, warmups,
 JIT compilation, etc. Plus, in the model I've picked here, speculation has some
-gnarly complications: rewinding linear layers when you mis-speculate is not a
-simple KV-truncate operation[>E].
+gnarly complications: rewinding linear layers when you mis-speculate is not
+simple[>E].
 
 [>E]: Some nice work on making this easier: https://dao-lab.ai/blog/2026/replayssm/
 
