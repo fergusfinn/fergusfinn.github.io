@@ -38,17 +38,14 @@ const logRatio = (g: number, B: number) => Math.log10(tMtp(g, B) / tDflash(B))
 
 const GAMMAS = Array.from({ length: 16 }, (_, i) => i + 1)
 const BMIN = 1
-const BMAX = 256
+const BMAX = 384
 const NROWS = 96
 const bEdge = (i: number) => BMIN + (i / NROWS) * (BMAX - BMIN) // linear cells
 
 // Symmetric diverging fill over the page background, in log-ratio v = log10(r).
 // Orange = DFlash cheaper (v > 0), blue = MTP cheaper (v < 0); intensity is |v|
 // on ONE shared scale (VMAX = 1 dex, i.e. 10x either way) so equal magnitudes
-// read as equal saturation. The field is genuinely lopsided -- DFlash wins by up
-// to ~9x, MTP by at most ~1.7x -- so the plot is deep orange against pale blue,
-// which is the honest picture. Composites the same on the canvas or as a CSS
-// gradient over the same background.
+// read as equal saturation.
 const VMAX = 1.0 // dex; colour saturates at a 10x ratio either way
 function fillColor(v: number, isDark: boolean): string {
   // Perceptual boost: alpha rises as |v|^0.55 so the mid-range ratios read as
@@ -75,7 +72,7 @@ function crossoverB(g: number): number | null {
   return 0.5 * (lo + hi)
 }
 
-const TOOLTIP_B = [1, 4, 16, 48, 96, 128, 161, 200, 256]
+const TOOLTIP_B = [1, 4, 16, 48, 96, 128, 161, 200, 256, 384]
 
 // Colourbar: bar fraction f maps linearly to log-ratio, f=0 -> -VMAX (deep blue,
 // MTP 10x), f=0.5 -> 0 (equal), f=1 -> +VMAX (deep orange, DFlash 10x). Ticks are
@@ -164,8 +161,8 @@ export default function DrafterCrossover() {
         ctx.font = `600 13px ${theme.fontFamily}`
         ctx.textAlign = 'center'
         ctx.fillStyle = theme.mutedForeground
-        ctx.fillText('MTP cheaper', xs.getPixelForValue(5), ys.getPixelForValue(225))
-        ctx.fillText('DFlash cheaper', xs.getPixelForValue(12), ys.getPixelForValue(70))
+        ctx.fillText('MTP cheaper', xs.getPixelForValue(5), ys.getPixelForValue(330))
+        ctx.fillText('DFlash cheaper', xs.getPixelForValue(12), ys.getPixelForValue(55))
         ctx.restore()
       },
     }
@@ -225,7 +222,7 @@ export default function DrafterCrossover() {
             title: axisTitle('decode batch B (tokens)'),
             grid: { display: false },
             afterBuildTicks: (axis) => {
-              axis.ticks = [1, 64, 128, 192, 256].map((v) => ({ value: v }))
+              axis.ticks = [1, 128, 256, 384].map((v) => ({ value: v }))
             },
             ticks: { ...tickStyle, callback: (v) => `${v}` },
           },

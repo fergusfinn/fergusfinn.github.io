@@ -139,10 +139,8 @@ paid the draft cost of the full block.
 Each has a cost to run at each point in batch-size and usable-depth space. MTP
 pays for $\gamma$ serial one-token passes. DFlash pays for one fixed $16$-block
 pass, then the policy chooses how much of that block to verify. At some points
-in that space, DFlash is cheaper, at some points EAGLE/MTP is cheaper[>J]:
-
-[>J]: This reasoning is irrespective of draft length, the actual wall clock win
-comes from trading off forward pass cost vs. total accepted.
+in that space, DFlash forward passes are cheaper, at some points EAGLE/MTP is
+cheaper:
 
 <DrafterCrossover client:load />
 
@@ -467,8 +465,9 @@ m_\text{state} = n_v\,d_k\,d_v\,b_\text{state} = 32 \cdot 128 \cdot 128 \cdot 2
 $$
 
 independent of $S$. The full simulator state also includes the small convolution
-state, which is why the total below is $33.4$ MB rather than exactly
-$30 \times 1.0$ MB. The compute is the gated delta-rule update plus the read-out:
+state, which is why the total below is $33.4$ MB rather than the $\approx 31.5$
+MB of bare $K^\top V$ state ($30 \times 1.05$ MB). The compute is the gated
+delta-rule update plus the read-out:
 
 $$
 f_\text{rec} = c\,n_v\,d_k\,d_v \quad \text{per token}, \qquad c \approx 8\ \text{FLOPs},
