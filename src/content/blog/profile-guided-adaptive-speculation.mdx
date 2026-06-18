@@ -239,9 +239,19 @@ $\alpha_k \sim \alpha^k$ pretty closely.
 
 The first thing to check is whether pricing the draft recovers what hand-tuning
 would. For each concurrency, the best fixed $\gamma$ is the one you would have
-chosen if you knew that exact operating point ahead of time. It does!
+chosen if you knew that exact operating point ahead of time. It does![>_1]
 
 <PricingEnvelope client:load />
+
+[>_1]: Its not really clear here why DFlash is so much more desirable than MTP,
+since we just show global throughput. But note -- DFlash matches the same kind
+of global output throughput at a much lower batch size, which means that a
+smaller number of users get a much faster experience. This is generally much
+harder to achieve. Also, because I don't know where else to put this and I
+think its a cool idea -- the best dynamic policy could switch between the heads
+at runtime! The actual weights of the spec models are pretty small: most of
+them are shared with each other and with the target model (i.e. the vocab
+head).
 
 Which is a good trick. We're doing ISL=1, OSL=1024[>Z], and the simulation is
 kind of oracular (i.e. it knows exactly how long the next step will take for
@@ -259,7 +269,6 @@ out how to tradeoff additional speculation vs. additional prefill chunks (which
 are required, in order for requests to progress into the decode phase). ISL=1
 OSL=1024 is the disaggregated prefill setup, i.e. assume a perfectly paced and
 scaled prefiller on separate GPUs.
-
 
 ### Heterogeneous draft lengths: gating on confidence
 
