@@ -43,36 +43,33 @@ vllm serve deepseek-ai/DeepSeek-V4-Flash \
   --gpu-memory-utilization 0.92 \
   --max-model-len 128000 \
   --max-num-batched-tokens 8192 \
+  --max-num-seqs 2048 \
   --tokenizer-mode deepseek_v4 \
   --tool-call-parser deepseek_v4 \
   --enable-auto-tool-choice \
-  --reasoning-parser deepseek_v4
+  --reasoning-parser deepseek_v4 \
+  --numa-bind
 ```
 
-Benchmark is `vllm bench serve`, closed-loop with concurrency tracking `max-num-seqs` so the queue is always full, ISL/OSL = 1024/1024, fp8 KV.
+Benchmark is `vllm bench serve`, random ISL/OSL = 1024/1024, request rate = inf, max concurrency = 2048.
 
-**4408 output tok/s, 1102 per GPU.** Reference point.
-
-## Tune it
-
-Pin TP workers to their NUMA nodes. Small but free.
-
-```diff
-+ --numa-bind
+```bash
+vllm bench serve \
+  --backend openai-chat \
+  --model deepseek-ai/DeepSeek-V4-Flash \
+  --endpoint /v1/chat/completions \
+  --dataset-name random \
+  --num-prompts 4096 \
+  --request-rate inf \
+  --max-concurrency 2048 \
+  --random-input-len 1024 \
+  --random-output-len 1024 \
+  --ignore-eos
 ```
 
-**4805 output tok/s, 1201 per GPU. +9%.**
+The run completed 4096/4096 requests with 0 failures, and the KV cache reached 100% usage.
 
-Now push the shape. vLLM caps CUDA-graph capture at batch 512 by default, so the decode batch falls off into eager. Raise the CG cap, raise `max-num-seqs` and bench concurrency together, push gmu to the practical ceiling.
-
-```diff
-- --gpu-memory-utilization 0.92
-+ --gpu-memory-utilization 0.97
-+ --max-num-seqs 1536
-+ --compilation-config '{"max_cudagraph_capture_size": 1536}'
-```
-
-**7624 output tok/s, 1906 per GPU. +59% on NUMA, +73% on §1.** Diminishing returns on this shape.
+**4852 output tok/s, 1213 per GPU. 9789 peak output tok/s. 9724 total tok/s.** Reference point.
 
 ## Change the shape
 
@@ -90,25 +87,25 @@ The drawback is that the weights get replicated. But for high-throughput or long
 - --tensor-parallel-size 4
 + --tensor-parallel-size 1
 + --data-parallel-size 4
-- --gpu-memory-utilization 0.97
-+ --gpu-memory-utilization 0.92
-```
-
-**11532 output tok/s, 2883 per GPU. +51%.**
-
-## Tune it, again
-
-Same playbook on the new shape: push gmu and max decode batch toward the practical ceiling. gmu wins. Push it to 0.975.
-
-```diff
 - --gpu-memory-utilization 0.92
-+ --gpu-memory-utilization 0.975
++ --gpu-memory-utilization 0.95
++ --compilation-config '{"max_cudagraph_capture_size":1536}'
 ```
 
-**13970 output tok/s, 3493 per GPU. +21% on §3. 3.17× on §1.**
+```bash
+vllm bench serve \
+  --backend openai-chat \
+  --model deepseek-ai/DeepSeek-V4-Flash \
+  --endpoint /v1/chat/completions \
+  --dataset-name random \
+  --num-prompts 4096 \
+  --request-rate inf \
+  --max-concurrency 2048 \
+  --random-input-len 1024 \
+  --random-output-len 1024 \
+  --ignore-eos
+```
 
-## Worklog ends here
+The run completed 4096/4096 requests with 0 failures, and the KV cache reached 53% usage.
 
-That's where the easy wins end. Past this number the levers stop being config knobs. MoE kernel choice and expert-routing imbalance, attention-side speculation, multi-node expert parallelism. Each is its own post.
-
-Written by hand.
+**11489 output tok/s, 2872 per GPU. 21329 peak output tok/s. 23023 total tok/s. 2.37× on §1.**

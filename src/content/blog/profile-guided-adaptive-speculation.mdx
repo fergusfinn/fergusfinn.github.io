@@ -131,10 +131,11 @@ part of the model. Link is to deepseek which introduced doing this at pretrain
 time.
 
 DFlash is an eight-layer block-diffusion model that drafts a fixed block in one
-forward pass, every position at once. In the setup here that block is $D=16$:
-the weights stream once and the vocabulary projection runs once over the whole
-block. A policy can choose to verify fewer than those positions, but it still
-paid the draft cost of the full block.
+forward pass, every position at once. In the setup here that block is $D=16$
+(TODO: Should think about how $D=8$ changes things): the weights stream once
+and the vocabulary projection runs once over the whole block. A policy can
+choose to verify fewer than those positions, but it still paid the draft cost
+of the full block.
 
 Each has a cost to run at each point in batch-size and usable-depth space. MTP
 pays for $\gamma$ serial one-token passes. DFlash pays for one fixed $16$-block

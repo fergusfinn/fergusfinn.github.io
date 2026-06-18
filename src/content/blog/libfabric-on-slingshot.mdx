@@ -1,0 +1,221 @@
+---
+title: 'Libfabric on Slingshot: a technical map'
+description: |
+  The object model, available operations, and ordering and completion
+  semantics of libfabric on HPE Slingshot — the reference you'd want
+  before writing any code against the fabric.
+pubDate: 'Jun 17 2026'
+draft: true
+---
+
+{/*
+STATUS: Full draft, pending review. Scope: main line covers the one-sided
+subset (fi_write, fi_inject_atomic); the rest is in the appendix.
+Companion to 'InfiniBand, RoCE, and the Ethernet takeover'.
+*/}
+
+libfabric is the portability layer that communication libraries target instead of writing to each fabric's native interface. The same source runs over InfiniBand, RoCE, AWS EFA, and HPE Slingshot, because each of those fabrics ships a libfabric provider that implements one API over its own hardware. On Slingshot that provider is called `cxi`, after the Cassini NIC it drives.
+
+This post is a map of that API as it behaves on Slingshot: the objects you allocate, the operations you can post, and the rules that decide when a transfer has actually happened. It stays at the libfabric interface and treats the Cassini hardware underneath as out of scope.
+
+## The object model.
+
+libfabric arranges everything into a small hierarchy, and the rest of the post leans on the names, so it is worth fixing them first[>1].
+
+A fabric is the whole network: every NIC and switch that can reach every other. A domain is one provider's view of one NIC inside that fabric, so a node with four Cassini NICs has four domains available. An endpoint is the object you send and receive through, allocated from a domain. Three supporting objects sit around an endpoint: a completion queue, where the provider reports finished operations; an address vector, which turns the network names of peers into compact handles; and memory regions, the buffers you have registered with the NIC so it can read and write them directly.
+
+```txt
+fabric  (the whole Slingshot network)
+└── domain  (one cxi NIC, e.g. cxi0)
+    └── endpoint  (the send/recv portal)
+        ├── completion queue  (finished operations land here)
+        ├── address vector    (peer name → fi_addr_t)
+        └── memory regions     (registered buffers)
+```
+
+The split exists because these objects have different lifetimes. A fabric and its domains are discovered once at startup. An address vector is populated once, when peers exchange names. Memory regions are registered per buffer and reused. The endpoint and its completion queue are the hot path, touched on every operation. Keeping them separate lets the expensive setup happen once and stay out of the steady state[>2].
+
+## Initialization and capability negotiation.
+
+Everything starts with `fi_getinfo`. You fill in a hints structure describing what you need, the library returns a list of `fi_info` structures describing what the available providers can supply, and you pick one. For Slingshot the fields that matter are the capability set, the endpoint type, the memory-registration mode, and the provider name[>3].
+
+```c
+struct fi_info *hints = fi_allocinfo();
+hints->caps = FI_RMA | FI_ATOMIC | FI_HMEM;
+hints->ep_attr->type = FI_EP_RDM;
+hints->domain_attr->mr_mode =
+    FI_MR_ENDPOINT | FI_MR_PROV_KEY | FI_MR_ALLOCATED | FI_MR_VIRT_ADDR;
+hints->fabric_attr->prov_name = strdup("cxi");
+
+struct fi_info *info;
+fi_getinfo(fi_version(), NULL, NULL, 0, hints, &info);
+```
+
+The capabilities are requests. `FI_RMA` asks for one-sided read and write, `FI_ATOMIC` for remote atomics, `FI_HMEM` for GPU memory; `fi_getinfo` returns only what the provider actually backs. The endpoint type is the larger decision. `FI_EP_RDM` is a reliable datagram endpoint: connectionless, so one endpoint talks to many peers with no per-peer connection setup. `FI_EP_MSG` is connection-oriented, one endpoint per connection, with an explicit connect and accept handshake. RMA-centric code uses `FI_EP_RDM`, and the rest of this post assumes it.
+
+The `mr_mode` bits are obligations rather than requests. Each one you accept is something you then have to do. `FI_MR_ENDPOINT` means a memory region must be bound to an endpoint and enabled before use. `FI_MR_PROV_KEY` means the provider, not you, assigns the remote access key. `FI_MR_ALLOCATED` means the memory must be backed before you register it. `FI_MR_VIRT_ADDR` means remote operations address a buffer by its virtual address. The exact set the CXI provider requires depends on configuration, and `fi_getinfo` returns the set it settled on[>4].
+
+The returned `info` also carries the domain name, `cxi0` through `cxi3`, so selecting a domain is selecting a NIC. Before encoding any of this, `fi_info -p cxi` on the target system enumerates exactly what the provider will offer[>5].
+
+## Fabric access: VNI, service, and traffic class.
+
+Opening a domain and enabling an endpoint is not sufficient to send traffic on Slingshot. The fabric requires every endpoint to present two things. A VNI, a virtual network identifier, partitions the network so that one job's traffic cannot reach another's. A CXI service is a kernel-level allocation that grants a process access to NIC resources. Both are normally created by the job launcher: Slurm's CXI plugin, or PALS on HPE systems, allocates a VNI for the job and a service per node and exports them through the environment. The `cxi` provider reads `FI_CXI_DEFAULT_VNI` and the service identifiers when it enables an endpoint and attaches them to the traffic[>6].
+
+Inside an allocation this is invisible, because the launcher has already set it up. Outside one, or in a process the launcher did not start, there is no VNI to attach, and endpoint enable or address-vector insertion fails without naming the cause. When the provider needs an explicit VNI and service, they go on the domain as an auth key:
+
+```c
+struct cxi_auth_key auth = {
+    .svc_id = svc_id,   // from the CXI service the launcher created
+    .vni    = vni,      // from SLINGSHOT_VNIS / FI_CXI_DEFAULT_VNI
+};
+hints->domain_attr->auth_key      = (void *)&auth;
+hints->domain_attr->auth_key_size = sizeof(auth);
+```
+
+A traffic class selects which hardware queues and quality-of-service treatment an operation receives. You set it on the transmit attributes, `tx_attr->tclass`, with `FI_TC_LOW_LATENCY` and `FI_TC_BULK_DATA` the two common choices, latency for small control traffic and bulk for large transfers.
+
+## Memory registration.
+
+Registering a buffer tells the NIC it may read and write that memory directly. On CXI the registration is three steps rather than one. You describe the buffer and its access permissions and call `fi_mr_regattr`, you bind the region to an endpoint with `fi_mr_bind`, and you call `fi_mr_enable` before using it. The bind and enable steps follow from the `FI_MR_ENDPOINT` mode set at startup; providers that scope regions to the domain instead skip them[>7].
+
+```c
+struct iovec iov = { .iov_base = buf, .iov_len = len };
+struct fi_mr_attr attr = {
+    .mr_iov      = &iov,
+    .iov_count   = 1,
+    .access      = FI_REMOTE_WRITE | FI_REMOTE_READ,
+    .iface       = FI_HMEM_CUDA,     // omit for host memory
+    .device.cuda = cuda_ordinal,
+};
+struct fid_mr *mr;
+fi_mr_regattr(domain, &attr, 0, &mr);
+fi_mr_bind(mr, &ep->fid, 0);
+fi_mr_enable(mr);
+uint64_t key = fi_mr_key(mr);   // hand to peers that will target this buffer
+```
+
+GPU memory adds two fields: `iface` set to `FI_HMEM_CUDA` and the device ordinal. The provider then needs a way to pin and translate device memory, and it has two. One is a dmabuf file descriptor exported by the driver; the other is direct CUDA API calls. The `FI_OPT_CUDA_API_PERMITTED` endpoint option chooses between them. Set it to false and the provider uses dmabuf and makes no CUDA calls of its own, which matters when the calling thread must stay out of the CUDA runtime. The dmabuf path needs a recent enough driver and kernel[>8].
+
+With `FI_MR_PROV_KEY` the provider assigns the remote key and `fi_mr_key` returns it. A peer cannot target the buffer without it, so the key and the buffer's address are what you exchange out of band before any RMA can happen.
+
+## Addressing.
+
+An endpoint's network name is an opaque blob you read with `fi_getname`. To target a peer you insert its name into your address vector with `fi_av_insert`, which returns an `fi_addr_t`: a small handle you pass to every operation. The translation from name to handle happens once.
+
+```c
+char name[64];
+size_t namelen = sizeof(name);
+fi_getname(&ep->fid, name, &namelen);            // own name, to publish
+
+fi_addr_t peer;
+fi_av_insert(av, peer_name, 1, &peer, 0, NULL);  // peer's name, once
+```
+
+Names travel over whatever bootstrap channel the application already has, a sockets exchange or MPI during startup. After insertion the steady state uses only the `fi_addr_t` handles, and the cost of resolving names is paid once at the start.
+
+## Operations.
+
+This post covers the one-sided subset: `fi_write`, which copies local memory into a remote buffer, and `fi_inject_atomic`, which applies an atomic operation to a remote location. One-sided means the target NIC services the operation without the target CPU taking part. The wider set is in the appendix[>9].
+
+`fi_write` names a local buffer, a peer, and the remote address and key:
+
+```c
+fi_write(ep, local, len, fi_mr_desc(local_mr),
+         peer, remote_addr, remote_key, context);
+```
+
+The `context` pointer is yours. It comes back on the completion, which is how you match a finished operation to the one you posted.
+
+Inject has narrower semantics. `fi_inject_atomic` copies its operand into a provider buffer before returning, so the source can be reused or freed immediately, and it produces no completion:
+
+```c
+uint64_t one = 1;
+fi_inject_atomic(ep, &one, 1, peer,
+                 remote_addr, remote_key, FI_UINT64, FI_SUM);
+```
+
+The price of injecting is a size limit, the `inject_size` the provider advertises, and the absence of a completion to tell you when the operation finished. It fits small fire-and-forget updates: incrementing a remote counter, setting a flag.
+
+## Completions, progress, and ordering.
+
+A posted operation is not finished when the call returns. The call hands the operation to the provider, and you learn it completed by reading the completion queue. Three things govern that reading: progress, the read mechanics, and ordering.
+
+Progress comes first because it is a precondition for the rest. CXI runs manual data progress, `FI_PROGRESS_MANUAL`, which means the provider advances a transfer only while a thread is inside one of its calls, in practice `fi_cq_read`. A program that posts a write and never reads its completion queue can stall that write indefinitely. Reading the queue is both how you collect completions and how you push transfers forward; they are the same call[>10].
+
+```c
+struct fi_cq_data_entry comp;
+ssize_t n = fi_cq_read(cq, &comp, 1);
+if (n > 0) {
+    // comp.op_context is the context passed to fi_write
+} else if (n == -FI_EAGAIN) {
+    // nothing ready; the call still advanced progress
+} else if (n == -FI_EAVAIL) {
+    struct fi_cq_err_entry err;
+    fi_cq_readerr(cq, &err, 0);
+    // err.err is the libfabric code, err.prov_errno the CXI one
+}
+```
+
+`fi_cq_read` returns the number of completions it wrote, or `-FI_EAGAIN` when none are ready. `-FI_EAGAIN` is the ordinary idle return, not a fault. Failures arrive on a separate path: an operation that fails makes the next `fi_cq_read` return `-FI_EAVAIL`, and `fi_cq_readerr` then retrieves an error entry carrying both the libfabric error code and the provider's own errno. The completion format chosen when the queue was opened decides which fields each entry holds.
+
+When you only need to know that some number of operations have finished, not the detail of each, a counter is lighter than a queue. `fi_cntr_open` creates one, binding it to an endpoint's writes makes it increment on each completion, and `fi_cntr_wait` blocks until it reaches a target count. One-sided libraries use a counter to wait for a batch of writes to land without walking a completion queue[>11].
+
+By default a write completes locally: the data has left and the source buffer is free to reuse. That is not the same as the data being visible at the target. `FI_DELIVERY_COMPLETE` strengthens the completion to mean the data has reached the remote target. The stronger guarantee costs a round trip, so you request it only where the program depends on it.
+
+The `msg_order` field sets the order in which the provider processes operations on an endpoint. `FI_ORDER_WAW` keeps writes in posting order, `FI_ORDER_RAW` makes a read observe a prior write, and so on. Processing order is not memory visibility. Two ordered writes are issued in order, but on a fabric with multiple paths the bytes of the first can land after the bytes of the second unless the specific ordering guarantee covers data and not just operation issue. The flag names describe the order operations are processed in, and only some of them extend to where the data becomes visible[>12].
+
+When that default is not enough, `FI_FENCE` on an operation makes the provider complete every operation already posted to the same peer before it starts the fenced one. It is the explicit barrier for the case where one transfer must observe the result of an earlier one.
+
+Above a size threshold the transfer mode changes. Small writes are eager: the data goes out with the message. Larger writes switch to rendezvous, where the sender posts a request, the target pulls the data, and the operation completes only after the pull. `FI_CXI_RDZV_THRESHOLD` sets the crossover. The mode interacts with ordering, because an eager write and a rendezvous write posted in sequence travel different paths and complete on different timelines, so a fence or an explicit delivery completion, rather than posting order alone, is what makes one happen before the other. That threshold is one knob in a large set of `FI_CXI_*` environment variables that tune the provider[>13].
+
+## What CXI doesn't have.
+
+Two absences are worth stating, because code written against other providers tends to assume them[>14].
+
+The first is write-with-immediate. Some providers let a write carry a small immediate value that surfaces in the target's completion queue, a cheap way to tell the receiver a write arrived. CXI's RMA writes generate no target-side completion at all, so there is nothing for an immediate to ride on. To signal arrival you post a separate small message or atomic after the write, or have the target poll the written memory.
+
+The second is GPU-initiated communication. No path exists for code running on the GPU to post fabric operations; every operation originates on the host CPU. A kernel that produces data to send returns to the host, and the host posts the transfer. Libraries that overlap GPU compute with communication structure themselves around this, posting from the host as kernels finish rather than from inside them.
+
+## Appendix: the rest of the surface.
+
+The main line covers `fi_write` and `fi_inject_atomic`. That is the slice the rest of the post needed, not the limit of the provider. The rest, in brief.
+
+RMA read. `fi_read` pulls remote memory into a local buffer, the mirror of `fi_write`.
+
+Two-sided messaging. `fi_send` and `fi_recv` are the two-sided path, where the receiver posts a buffer in advance and the sender targets the endpoint rather than a specific remote address. With `FI_TAGGED` each message carries a tag the receiver matches on, which is the mechanism MPI and most collective libraries are built on[>15].
+
+The full atomic set. `fi_inject_atomic` is one cell in a matrix. `fi_atomic`, `fi_fetch_atomic`, and `fi_compare_atomic` cross the operations (sum, min, the bitwise set, compare-and-swap, and the rest) with the datatypes, in plain, fetching, and comparing variants. `fi_query_atomic` reports which combinations the provider actually implements.
+
+Per-operation flags. The `*msg` forms of each call, `fi_writemsg` and `fi_atomicmsg`, take a flags argument that overrides endpoint defaults for a single operation: `FI_INJECT` to inline a small payload, `FI_COMPLETION` to force or suppress a completion, `FI_FENCE` for the ordering barrier described above, `FI_MORE` to batch a sequence before the provider processes it.
+
+Connection management. The whole post assumes `FI_EP_RDM`, which is connectionless. `FI_EP_MSG` is connection-oriented and brings the machinery RDM avoids: `fi_listen`, `fi_connect`, and `fi_accept` to establish a connection, and an event queue, `fi_eq`, to carry the connection-state events. RDM is the usual choice on Slingshot because it skips all of this.
+
+[>1]: The libfabric man pages at [ofiwg.github.io](https://ofiwg.github.io/libfabric/main/man/) are the reference throughout. Each object has a page: [fi_fabric(3)](https://ofiwg.github.io/libfabric/main/man/fi_fabric.3.html), [fi_domain(3)](https://ofiwg.github.io/libfabric/main/man/fi_domain.3.html), [fi_endpoint(3)](https://ofiwg.github.io/libfabric/main/man/fi_endpoint.3.html), [fi_mr(3)](https://ofiwg.github.io/libfabric/main/man/fi_mr.3.html), [fi_av(3)](https://ofiwg.github.io/libfabric/main/man/fi_av.3.html), [fi_cq(3)](https://ofiwg.github.io/libfabric/main/man/fi_cq.3.html). CXI-specific behaviour is in [fi_cxi(7)](https://ofiwg.github.io/libfabric/main/man/fi_cxi.7.html).
+
+[>2]: Each libfabric object is a thin wrapper over a Cassini hardware concept (endpoints over Portals table entries, completion queues over hardware event queues). The [Portals 4 specification](https://www.sandia.gov/app/uploads/sites/144/2022/07/portals-4.2.pdf) is the reference for that layer; this post treats it as out of scope beyond noting where the mapping is direct.
+
+[>3]: [fi_getinfo(3)](https://ofiwg.github.io/libfabric/main/man/fi_getinfo.3.html) documents the full hints structure and capability flags; [fi_endpoint(3)](https://ofiwg.github.io/libfabric/main/man/fi_endpoint.3.html) covers the endpoint types.
+
+[>4]: The `mr_mode` bits, along with the progress and threading attributes an endpoint inherits from its domain, are described in [fi_domain(3)](https://ofiwg.github.io/libfabric/main/man/fi_domain.3.html) and [fi_mr(3)](https://ofiwg.github.io/libfabric/main/man/fi_mr.3.html). The threading model you request is a promise about which objects you will serialise access to.
+
+[>5]: `fi_info` ships with libfabric; `fi_pingpong` and the rest of the fabtests suite are the standard check that the provider is present and moves bytes before any of your own code runs.
+
+[>6]: The VNI, service, and traffic-class model is in [fi_cxi(7)](https://ofiwg.github.io/libfabric/main/man/fi_cxi.7.html), and the `cxi_service` utility manages services at the system level. The practical note: outside a job allocation you usually have no usable VNI, and the failure presents as endpoint enable or address-vector insertion failing rather than as a permissions error.
+
+[>7]: [fi_mr(3)](https://ofiwg.github.io/libfabric/main/man/fi_mr.3.html) covers the registration model, the mode bits, and the bind and enable lifecycle.
+
+[>8]: The HMEM section of [fi_cxi(7)](https://ofiwg.github.io/libfabric/main/man/fi_cxi.7.html) documents GPU memory registration, the dmabuf path, and the CUDA API option.
+
+[>9]: [fi_rma(3)](https://ofiwg.github.io/libfabric/main/man/fi_rma.3.html) for `fi_write`; [fi_atomic(3)](https://ofiwg.github.io/libfabric/main/man/fi_atomic.3.html) for `fi_inject_atomic` and the rest of the atomic calls.
+
+[>10]: [fi_cq(3)](https://ofiwg.github.io/libfabric/main/man/fi_cq.3.html) documents `fi_cq_read`, `fi_cq_readerr`, the completion formats, and the `-FI_EAGAIN` convention. The progress model is a domain attribute; the practical consequence is that a thread which stops polling stops the data flow.
+
+[>11]: [fi_cntr(3)](https://ofiwg.github.io/libfabric/main/man/fi_cntr.3.html). Counters bind to endpoints and increment on completion, which is enough for "wait until N writes have landed" without the per-operation bookkeeping of a completion queue.
+
+[>12]: The `msg_order` flags and `FI_FENCE` are in [fi_endpoint(3)](https://ofiwg.github.io/libfabric/main/man/fi_endpoint.3.html), with the fence flag also described per-operation in [fi_rma(3)](https://ofiwg.github.io/libfabric/main/man/fi_rma.3.html). `FI_DELIVERY_COMPLETE` and its interaction with ordering are in [fi_cxi(7)](https://ofiwg.github.io/libfabric/main/man/fi_cxi.7.html).
+
+[>13]: `FI_CXI_RDZV_THRESHOLD` is one entry in the `FI_CXI_*` environment-variable surface documented in [fi_cxi(7)](https://ofiwg.github.io/libfabric/main/man/fi_cxi.7.html); the rest tune match-mode, buffering, and rendezvous behaviour.
+
+[>14]: Both absences are noted in [fi_cxi(7)](https://ofiwg.github.io/libfabric/main/man/fi_cxi.7.html); the point of the section is the design consequence rather than the gap itself.
+
+[>15]: [fi_msg(3)](https://ofiwg.github.io/libfabric/main/man/fi_msg.3.html) for untagged messaging, [fi_tagged(3)](https://ofiwg.github.io/libfabric/main/man/fi_tagged.3.html) for tag matching, [fi_cm(3)](https://ofiwg.github.io/libfabric/main/man/fi_cm.3.html) and [fi_eq(3)](https://ofiwg.github.io/libfabric/main/man/fi_eq.3.html) for connection management on `FI_EP_MSG`.

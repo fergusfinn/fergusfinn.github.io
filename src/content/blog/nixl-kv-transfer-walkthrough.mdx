@@ -1,0 +1,92 @@
+---
+title: 'TODO: vLLM, NIXL, UCCL, and KV cache transfers'
+description: |
+  Notes on how vLLM initiates a KV cache transfer through NIXL, with
+  source links into vLLM and NIXL.
+pubDate: 'Jun 17 2026'
+draft: true
+---
+
+{/*
+STATUS: Raw notes pasted from chat response.
+
+NOTES:
+- Placeholder title.
+- Source links are pinned to the local vLLM and NIXL commits inspected while drafting.
+*/}
+
+Here is the trace with GitHub links, pinned to the local checkout commits I inspected: `doublewordai/vllm@e2271c3` and `ai-dynamo/nixl@f4b10ff`.
+
+At the vLLM layer, "initiate a KV transfer" means: the scheduler decides a request should load remote KV, then the worker posts a NIXL `READ` before useful model work for that request.
+
+1. vLLM is configured with a KV connector, e.g. `NixlConnector`, via [`KVTransferConfig`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/config/kv_transfer.py#L23-L125). That carries role, engine id, buffer device, and extra config such as NIXL backends.
+
+2. During worker KV-cache initialization, vLLM calls [`ensure_kv_transfer_initialized(...)`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/v1/worker/gpu_worker.py#L550-L555), which creates the global connector via [`KVConnectorFactory.create_connector`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/distributed/kv_transfer/kv_transfer_state.py#L65-L87). The GPU model runner then wraps it in an [`ActiveKVConnector`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/v1/worker/gpu/kv_connector.py#L48-L58).
+
+3. The NIXL connector worker creates a `nixl._api.nixl_agent`. If `kv_connector_extra_config["backends"]` contains `UCCL`, NIXL instantiates the UCCL backend plugin. See vLLM's backend config read in [`nixl/worker.py`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/distributed/kv_transfer/kv_connector/v1/nixl/worker.py#L216-L218), lazy import in [`nixl_utils.py`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/distributed/nixl_utils.py#L46-L73), and backend creation in NIXL [`_api.py`](https://github.com/ai-dynamo/nixl/blob/f4b10ff097daedf8cea7c9e369ea07f4ec1ca3a1/src/api/python/_api.py#L236-L252).
+
+4. At registration time, vLLM walks the KV cache tensors, turns K/V regions into NIXL descriptors, calls `register_memory`, prepares local transfer descriptor lists, and builds handshake metadata. Main path: [`register_kv_caches`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/distributed/kv_transfer/kv_connector/v1/nixl/worker.py#L788-L1013), metadata schema: [`NixlAgentMetadata`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/distributed/kv_transfer/kv_connector/v1/nixl/metadata.py#L42-L72).
+
+5. On the producer/prefill side, when a request finishes, vLLM does not push bytes. It delays freeing blocks and returns `kv_transfer_params` containing remote block IDs, engine ID, request ID, host, port, and TP size. See [`request_finished`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/distributed/kv_transfer/kv_connector/v1/nixl/scheduler.py#L580-L650) and the returned params at [`L664-L674`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/distributed/kv_transfer/kv_connector/v1/nixl/scheduler.py#L664-L674).
+
+6. On the consumer/decode side, those params arrive as `sampling_params.extra_args["kv_transfer_params"]` and are stored on the request: [`request.py`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/v1/request.py#L101-L117). The scheduler asks the connector how many external tokens are available, allocates local destination blocks, and records connector metadata: [`scheduler.py`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/v1/core/sched/scheduler.py#L597-L650), [`L721-L751`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/v1/core/sched/scheduler.py#L721-L751).
+
+7. If the load is async, vLLM parks the request in `WAITING_FOR_REMOTE_KVS`: [`scheduler.py`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/v1/core/sched/scheduler.py#L763-L770).
+
+8. During the worker step, before model forward, `ActiveKVConnector.pre_forward()` binds the scheduler metadata and calls `start_load_kv()`: [`gpu/kv_connector.py`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/v1/worker/gpu/kv_connector.py#L62-L76).
+
+9. `NixlConnectorWorker.start_load_kv()` handshakes if needed, loads remote metadata, prepares descriptor lists, computes local/remote descriptor indices, then posts a NIXL `READ`: [`start_load_kv`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/distributed/kv_transfer/kv_connector/v1/nixl/worker.py#L1933-L1968), [`_read_blocks_for_req`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/distributed/kv_transfer/kv_connector/v1/nixl/worker.py#L2021-L2095), and the actual [`make_prepped_xfer("READ", ...)` / `transfer(handle)`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/distributed/kv_transfer/kv_connector/v1/nixl/worker.py#L2217-L2233).
+
+10. In NIXL Python, that maps to `agent.makeXferReq(...)` and `agent.postXferReq(...)`: [`make_prepped_xfer`](https://github.com/ai-dynamo/nixl/blob/f4b10ff097daedf8cea7c9e369ea07f4ec1ca3a1/src/api/python/_api.py#L552-L580), [`transfer`](https://github.com/ai-dynamo/nixl/blob/f4b10ff097daedf8cea7c9e369ea07f4ec1ca3a1/src/api/python/_api.py#L631-L638). Below that, NIXL selects the backend, which is where the UCCL plugin takes over.
+
+Compact model: prefill vLLM publishes "these KV blocks are readable here"; decode vLLM receives those coordinates, allocates local KV blocks, and posts a NIXL `READ` from the remote prefill KV cache into the local decode KV cache. Completion is polled via [`check_xfer_state`](https://github.com/ai-dynamo/nixl/blob/f4b10ff097daedf8cea7c9e369ea07f4ec1ca3a1/src/api/python/_api.py#L647-L654), then vLLM promotes the request out of [`WAITING_FOR_REMOTE_KVS`](https://github.com/doublewordai/vllm/blob/e2271c323ed3da1dd3827cc84b142b8b621e61b5/vllm/v1/core/sched/scheduler.py#L2069-L2118).
+
+This takes us up to NIXL's Python API: `make_prepped_xfer(...)` and `transfer(handle)`. UCCL comes in underneath that, as the selected NIXL backend.
+
+The handoff is:
+
+1. vLLM configures NIXL with `backends=["UCCL"]`.
+
+2. NIXL loads the UCCL plugin. The plugin registers itself under the backend name `"UCCL"` and supports `DRAM_SEG` and `VRAM_SEG`: [`uccl_plugin.cpp#L41-L44`](https://github.com/ai-dynamo/nixl/blob/f4b10ff097daedf8cea7c9e369ea07f4ec1ca3a1/src/plugins/uccl/uccl_plugin.cpp#L41-L44).
+
+3. When NIXL instantiates that backend, it constructs `nixlUcclEngine`, which immediately creates a UCCL engine with `uccl_engine_create(...)` and starts a listener thread for accepted connections: [`uccl_backend.cpp#L84-L97`](https://github.com/ai-dynamo/nixl/blob/f4b10ff097daedf8cea7c9e369ea07f4ec1ca3a1/src/plugins/uccl/uccl_backend.cpp#L84-L97), [`#L141-L165`](https://github.com/ai-dynamo/nixl/blob/f4b10ff097daedf8cea7c9e369ea07f4ec1ca3a1/src/plugins/uccl/uccl_backend.cpp#L141-L165).
+
+4. During memory registration, the UCCL NIXL backend calls into UCCL:
+   - `uccl_engine_reg(...)` registers the local memory
+   - `uccl_engine_prepare_fifo(...)` creates the UCCL remote-access metadata
+   - `getPublicData(...)` serializes that FIFO metadata into NIXL-visible public metadata
+
+   See [`registerMem`](https://github.com/ai-dynamo/nixl/blob/f4b10ff097daedf8cea7c9e369ea07f4ec1ca3a1/src/plugins/uccl/uccl_backend.cpp#L342-L383) and [`getPublicData`](https://github.com/ai-dynamo/nixl/blob/f4b10ff097daedf8cea7c9e369ea07f4ec1ca3a1/src/plugins/uccl/uccl_backend.cpp#L178-L203).
+
+5. During remote metadata load, the UCCL backend decodes the peer's serialized FIFO item: [`loadRemoteMD`](https://github.com/ai-dynamo/nixl/blob/f4b10ff097daedf8cea7c9e369ea07f4ec1ca3a1/src/plugins/uccl/uccl_backend.cpp#L434-L491).
+
+6. During transfer preparation, NIXL calls the backend's `prepXfer`. For UCCL, this finds the UCCL connection for the remote agent, deserializes each remote FIFO item, and patches it with the actual remote descriptor address and size via `uccl_engine_update_fifo(...)`: [`prepXfer`](https://github.com/ai-dynamo/nixl/blob/f4b10ff097daedf8cea7c9e369ea07f4ec1ca3a1/src/plugins/uccl/uccl_backend.cpp#L503-L585). This is one of the places where the RMA addressing review comment bites.
+
+7. During transfer posting, NIXL calls the backend's `postXfer`. For UCCL, this builds vectors of local MR IDs, local addresses, sizes, and remote FIFO items, then calls:
+   - `uccl_engine_read_vector(...)` for `NIXL_READ`
+   - `uccl_engine_write_vector(...)` for `NIXL_WRITE`
+
+   See [`postXfer`](https://github.com/ai-dynamo/nixl/blob/f4b10ff097daedf8cea7c9e369ea07f4ec1ca3a1/src/plugins/uccl/uccl_backend.cpp#L592-L707).
+
+Then we are in the UCCL repo proper.
+
+`uccl_engine_read_vector(...)` chooses local IPC if available, otherwise network RDMA via `Endpoint::readv_async(...)`: [`uccl_engine.cc#L319-L362`](https://github.com/doublewordai/uccl/blob/c728050453a8d00bd55d50dcbbd72334d8b9948d/p2p/uccl_engine.cc#L319-L362). `write_vector` is the same shape for writes: [`#L421-L464`](https://github.com/doublewordai/uccl/blob/c728050453a8d00bd55d50dcbbd72334d8b9948d/p2p/uccl_engine.cc#L421-L464).
+
+For CXI specifically, UCCL's `Endpoint` selects `CxiEndpoint` when `UCCL_P2P_TRANSPORT=cxi` is set. The vector async path queues work into UCCL's proxy machinery, which eventually posts per-iov transport ops through the endpoint wrapper and lands in `CxiEndpoint::uccl_read_async` / `uccl_write_async`, then `post_rma(...)`, then libfabric `fi_read` / `fi_write`.
+
+Completion goes back up the same stack:
+
+- UCCL polls `Endpoint::poll_async` via `uccl_engine_xfer_status(...)`: [`uccl_engine.cc#L478-L481`](https://github.com/doublewordai/uccl/blob/c728050453a8d00bd55d50dcbbd72334d8b9948d/p2p/uccl_engine.cc#L478-L481)
+- NIXL's UCCL backend `checkXfer(...)` calls that and, on success, sends the UCCL notification: [`uccl_backend.cpp#L711-L753`](https://github.com/ai-dynamo/nixl/blob/f4b10ff097daedf8cea7c9e369ea07f4ec1ca3a1/src/plugins/uccl/uccl_backend.cpp#L711-L753)
+- vLLM later sees the NIXL transfer as done and promotes the request out of `WAITING_FOR_REMOTE_KVS`.
+
+So the clean mental model is:
+
+`vLLM NixlConnector`
+-> `nixl_agent.makeXferReq/postXferReq`
+-> NIXL backend dispatch
+-> `nixlUcclEngine::prepXfer/postXfer`
+-> `uccl_engine_read_vector/write_vector`
+-> UCCL `Endpoint::readv_async/writev_async`
+-> CXI endpoint
+-> libfabric `fi_read/fi_write`.

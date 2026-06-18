@@ -15,6 +15,15 @@ const drafts = import.meta.env.DEV
 			(a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf()
 		)
 	: []
+
+// Unindexed posts are published (built, reachable by URL) but hidden from the
+// index. Like drafts, they get their own dev-only row so they stay visible
+// while working locally.
+const unindexed = import.meta.env.DEV
+	? (
+			await getCollection('blog', ({ data }) => data.index === false && !data.draft)
+		).sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf())
+	: []
 ---
 
 <BaseLayout>
@@ -29,6 +38,21 @@ const drafts = import.meta.env.DEV
 				<h2 class="text-3xl pb-8 font-bold">Drafts</h2>
 				<ul class="posts-grid-container">
 					{drafts.map((post) => (
+						<li>
+							<BlogCard post={post} />
+						</li>
+					))}
+				</ul>
+				<hr class="mt-16 border-t border-foreground/15 dark:border-foreground-dark/15" />
+			</section>
+		)
+	}
+	{
+		unindexed.length > 0 && (
+			<section class="app-container lg:!px-16 xl:!px-24 2xl:!px-32 pt-16">
+				<h2 class="text-3xl pb-8 font-bold">Unindexed</h2>
+				<ul class="posts-grid-container">
+					{unindexed.map((post) => (
 						<li>
 							<BlogCard post={post} />
 						</li>
