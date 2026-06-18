@@ -110,9 +110,13 @@ export default function PricingEnvelope() {
             callbacks: {
               title: (items) => (items.length ? `concurrency ${items[0].parsed.x}` : ''),
               label: (ctx) => {
-                const i = CONC.indexOf(ctx.parsed.x)
+                const x = ctx.parsed.x
+                const y = ctx.parsed.y
+                if (typeof x !== 'number' || typeof y !== 'number') return ''
+
+                const i = CONC.indexOf(x)
                 const g = ctx.dataset.label === 'MTP' ? MTP_G[i] : DF_G[i]
-                return `  ${ctx.dataset.label}: ${(ctx.parsed.y ?? 0).toFixed(2)}× no-spec  (γ${g})`
+                return `  ${ctx.dataset.label}: ${y.toFixed(2)}× no-spec  (γ${g})`
               },
             },
           },

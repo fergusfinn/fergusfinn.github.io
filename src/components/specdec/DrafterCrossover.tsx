@@ -6,30 +6,35 @@ if (typeof window !== 'undefined') {
   Chart.register(...registerables)
 }
 
-// Where each drafter wins, as a field over (draft depth gamma, decode batch B).
-// Colour is the cost ratio t_MTP / t_DFlash: orange where DFlash is cheaper,
+// Where each drafter wins, as a field over usable verify depth gamma and decode batch B.
+// Colour is the drafter cost ratio t_MTP(gamma, B) / t_DFlash(B): orange where DFlash is cheaper,
 // blue where MTP is cheaper, with the equal-cost contour drawn through ratio = 1.
 // Qwen3.6-35B-A3B / B200 bf16. Both heads borrow the target's 0.509 B vocab
-// projection; MTP re-reads it on each of its gamma serial passes (intensity B),
-// DFlash reads it once for the whole gamma-block (intensity B*gamma). So DFlash
-// goes compute-bound far sooner and the orange region is the low-batch interior;
-// MTP's smaller FLOP bill wins above the contour (B ~ 161) and on the gamma = 1
-// edge, where an eight-layer block head never pays off to make a single token.
+// output projection. MTP re-reads that dense path on each serial pass, and its
+// one MoE layer coupon-collects routed experts over the B-token pass. DFlash
+// reads one fixed 16-position block regardless of how shallow the verify is.
 
 const PEAK = 2.25e15 // B200 bf16, FLOP/s
 const BW = 8.0e12 // HBM bandwidth, B/s
 const BPP = 2 // bytes per bf16 param
 
-// Params each head streams per pass (from the HF configs). Shared head dominates.
-const P_HEAD = 508_559_360 // tied target vocab projection, d*V = 2048*248320
-const P_MTP = P_HEAD + 55_574_528 // + one EAGLE-style MoE layer  -> 0.564 B
+// Params each head streams per pass (from the HF configs). Target LM head dominates.
+const P_HEAD = 508_559_360 // target lm_head, d*V = 2048*248320
+const MTP_DENSE = 535_822_336 // lm_head + attention + EAGLE fusion
+const MTP_EXPERT = 3_145_728 // one routed/shared expert FFN
+const MTP_E = 256
+const MTP_K = 8
+const MTP_SHARED = 1
 const P_DF = P_HEAD + 473_956_352 // + eight dense layers + 5-layer fusion -> 0.983 B
+const DF_BLOCK = 16
 
+const mtpLoadedExperts = (B: number) => MTP_E * (1 - Math.pow(1 - 1 / MTP_E, B * MTP_K))
+const mtpActive = MTP_DENSE + (MTP_K + MTP_SHARED) * MTP_EXPERT
+const mtpResident = (B: number) => MTP_DENSE + (MTP_SHARED + mtpLoadedExperts(B)) * MTP_EXPERT
 const tMtp = (g: number, B: number) =>
-  g * Math.max((2 * P_MTP * B) / PEAK, (P_MTP * BPP) / BW)
-const tDflash = (g: number, B: number) =>
-  Math.max((2 * P_DF * B * g) / PEAK, (P_DF * BPP) / BW)
-const logRatio = (g: number, B: number) => Math.log10(tMtp(g, B) / tDflash(g, B))
+  g * Math.max((2 * mtpActive * B) / PEAK, (BPP * mtpResident(B)) / BW)
+const tDflash = (B: number) => Math.max((2 * P_DF * B * DF_BLOCK) / PEAK, (P_DF * BPP) / BW)
+const logRatio = (g: number, B: number) => Math.log10(tMtp(g, B) / tDflash(B))
 
 const GAMMAS = Array.from({ length: 16 }, (_, i) => i + 1)
 const BMIN = 1
@@ -55,10 +60,11 @@ function fillColor(v: number, isDark: boolean): string {
     : `hsla(220, 72%, ${isDark ? 62 : 44}%, ${a})`
 }
 
-// Batch where the two costs are equal, per gamma column (null if MTP wins for
-// all B, which happens at gamma = 1: a block head is never worth one token).
+// Batch where the two costs are equal, per gamma column. Null means no crossing
+// in the visible batch range: MTP wins throughout at gamma = 1, while DFlash wins
+// throughout at the deepest usable verify widths.
 function crossoverB(g: number): number | null {
-  if (logRatio(g, BMIN) <= 0) return null
+  if (logRatio(g, BMIN) <= 0 || logRatio(g, BMAX) >= 0) return null
   let lo = BMIN
   let hi = BMAX
   for (let k = 0; k < 40; k++) {
@@ -153,13 +159,13 @@ export default function DrafterCrossover() {
           ctx.fillStyle = theme.foreground
           ctx.font = `600 12px ${theme.fontFamily}`
           ctx.textAlign = 'right'
-          ctx.fillText('equal cost  (B ≈ 161)', last.x - 4, last.y - 7)
+          ctx.fillText('equal cost', last.x - 4, last.y - 7)
         }
         ctx.font = `600 13px ${theme.fontFamily}`
         ctx.textAlign = 'center'
         ctx.fillStyle = theme.mutedForeground
-        ctx.fillText('MTP cheaper', xs.getPixelForValue(9.5), ys.getPixelForValue(225))
-        ctx.fillText('DFlash cheaper', xs.getPixelForValue(9.5), ys.getPixelForValue(70))
+        ctx.fillText('MTP cheaper', xs.getPixelForValue(5), ys.getPixelForValue(225))
+        ctx.fillText('DFlash cheaper', xs.getPixelForValue(12), ys.getPixelForValue(70))
         ctx.restore()
       },
     }
@@ -192,9 +198,10 @@ export default function DrafterCrossover() {
                 return p ? `γ = ${p.x},  B = ${p.y} tok` : ''
               },
               label: (ctx) => {
-                const g = ctx.parsed.x
-                const B = ctx.parsed.y
-                const r = tMtp(g, B) / tDflash(g, B)
+                const { x: g, y: B } = ctx.parsed
+                if (typeof g !== 'number' || typeof B !== 'number') return ''
+
+                const r = tMtp(g, B) / tDflash(B)
                 return r > 1
                   ? `  DFlash ${r.toFixed(1)}× cheaper`
                   : `  MTP ${(1 / r).toFixed(1)}× cheaper`
@@ -207,7 +214,7 @@ export default function DrafterCrossover() {
             type: 'linear',
             min: 0.5,
             max: 16.5,
-            title: axisTitle('draft depth γ (tokens per round)'),
+            title: axisTitle('usable verify depth γ (tokens per round)'),
             ticks: { ...tickStyle, stepSize: 1, autoSkip: false },
             grid: { display: false },
           },

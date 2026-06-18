@@ -127,7 +127,12 @@ export default function AcceptJointHeatmap() {
                   const p = items[0]?.parsed
                   return p ? `predicted ${p.x}, committed ${p.y}` : ''
                 },
-                label: (ctx) => `  ${(M[ctx.parsed.y]?.[ctx.parsed.x] ?? 0).toFixed(2)}% of rounds`,
+                label: (ctx) => {
+                  const x = ctx.parsed.x
+                  const y = ctx.parsed.y
+                  if (typeof x !== 'number' || typeof y !== 'number') return ''
+                  return `  ${(M[y]?.[x] ?? 0).toFixed(2)}% of rounds`
+                },
               },
             },
           },
