@@ -45,8 +45,6 @@ hardware works like this:
       <path d="M 0 0 L 8 4.5 L 0 9 z" fill="#b5532a" />
     </marker>
   </defs>
-
-  {/* ===== standard-path steps (columns) ===== */}
   <text class="who" x="44" y="24">SENDER</text>
   <text class="who" x="500" y="24">RECEIVER</text>
   <text class="step" x="44" y="48"><tspan class="num">1</tspan>  App hands data to the kernel</text>
@@ -56,25 +54,20 @@ hardware works like this:
   <text class="step" x="500" y="48"><tspan class="num">1</tspan>  NIC DMAs into a kernel buffer</text>
   <text class="step" x="500" y="71"><tspan class="num">2</tspan>  Kernel copies it into app buffer</text>
   <text class="step" x="500" y="94"><tspan class="num">3</tspan>  Kernel notifies the waiting app</text>
-
-  {/* ===== STANDARD panel ===== */}
   <rect class="host" x="36" y="141" width="356" height="52" rx="8" />
   <rect class="host" x="492" y="141" width="356" height="52" rx="8" />
-
   <rect class="box" x="44"  y="147" width="92" height="40" rx="8" fill="#f4d6c0" />
   <text class="label" x="90"  y="172" text-anchor="middle">app buf</text>
   <rect class="box" x="168" y="147" width="92" height="40" rx="8" fill="#eee9d8" />
   <text class="label" x="214" y="172" text-anchor="middle">kernel</text>
   <rect class="box" x="292" y="147" width="92" height="40" rx="8" fill="#d4e8d0" />
   <text class="label" x="338" y="172" text-anchor="middle">NIC</text>
-
   <rect class="box" x="500" y="147" width="92" height="40" rx="8" fill="#d4e8d0" />
   <text class="label" x="546" y="172" text-anchor="middle">NIC</text>
   <rect class="box" x="624" y="147" width="92" height="40" rx="8" fill="#eee9d8" />
   <text class="label" x="670" y="172" text-anchor="middle">kernel</text>
   <rect class="box" x="748" y="147" width="92" height="40" rx="8" fill="#f4d6c0" />
   <text class="label" x="794" y="172" text-anchor="middle">app buf</text>
-
   <path class="hot"  d="M 136 167 L 168 167" marker-end="url(#kpath-arrow-hot)" />
   <text class="copy" x="152" y="205" text-anchor="middle">copy</text>
   <path class="line" d="M 260 167 L 292 167" marker-end="url(#kpath-arrow)" />
@@ -115,13 +108,11 @@ hardware works like this:
       <path d="M 0 0 L 8 4.5 L 0 9 z" fill="#b5532a" />
     </marker>
   </defs>
-
   <text class="who" x="38" y="22">SENDER</text>
   <text class="step" x="38" y="46"><tspan class="num">1</tspan>  App hands data to the kernel</text>
   <text class="step" x="38" y="69"><tspan class="num">2</tspan>  Kernel copies into socket buffer</text>
   <text class="step" x="38" y="92"><tspan class="num">3</tspan>  Kernel schedules the NIC</text>
   <text class="step" x="38" y="115"><tspan class="num">4</tspan>  NIC DMAs from buffer onto wire</text>
-
   <rect class="host" x="38" y="132" width="324" height="52" rx="8" />
   <rect class="box" x="46"  y="138" width="92" height="40" rx="8" fill="#f4d6c0" />
   <text class="label" x="92"  y="163" text-anchor="middle">app buf</text>
@@ -131,11 +122,9 @@ hardware works like this:
   <text class="label" x="308" y="163" text-anchor="middle">NIC</text>
   <path class="hot"  d="M 138 158 L 154 158" marker-end="url(#mkpath-arrow-hot)" />
   <path class="line" d="M 246 158 L 262 158" marker-end="url(#mkpath-arrow)" />
-
   <path class="wire" d="M 308 184 L 308 216" marker-end="url(#mkpath-arrow)" />
   <text class="tag" x="320" y="204">network</text>
   <text class="who" x="38" y="210">RECEIVER</text>
-
   <rect class="host" x="38" y="216" width="324" height="52" rx="8" />
   <rect class="box" x="262" y="222" width="92" height="40" rx="8" fill="#d4e8d0" />
   <text class="label" x="308" y="247" text-anchor="middle">NIC</text>
@@ -145,7 +134,6 @@ hardware works like this:
   <text class="label" x="92"  y="247" text-anchor="middle">app buf</text>
   <path class="line" d="M 262 242 L 246 242" marker-end="url(#mkpath-arrow)" />
   <path class="hot"  d="M 154 242 L 138 242" marker-end="url(#mkpath-arrow-hot)" />
-
   <text class="step" x="38" y="296"><tspan class="num">1</tspan>  NIC DMAs into a kernel buffer</text>
   <text class="step" x="38" y="319"><tspan class="num">2</tspan>  Kernel copies it into app buffer</text>
   <text class="step" x="38" y="342"><tspan class="num">3</tspan>  Kernel notifies the waiting app</text>
@@ -207,26 +195,22 @@ Direct Memory Access (RDMA):
       <path d="M 0 0 L 8 4.5 L 0 9 z" fill="#444" />
     </marker>
   </defs>
-
   <text class="who" x="44" y="24">SENDER</text>
   <text class="who" x="500" y="24">RECEIVER</text>
   <rect class="host" x="36" y="34" width="356" height="52" rx="8" />
   <rect class="host" x="492" y="34" width="356" height="52" rx="8" />
-
   <rect class="box" x="44"  y="40" width="92" height="40" rx="8" fill="#f4d6c0" />
   <text class="label" x="90"  y="65" text-anchor="middle">app buf</text>
   <rect class="box faint" x="168" y="40" width="92" height="40" rx="8" fill="#eee9d8" />
   <text class="muted" x="214" y="65" text-anchor="middle">kernel</text>
   <rect class="box" x="292" y="40" width="92" height="40" rx="8" fill="#d4e8d0" />
   <text class="label" x="338" y="65" text-anchor="middle">NIC</text>
-
   <rect class="box" x="500" y="40" width="92" height="40" rx="8" fill="#d4e8d0" />
   <text class="label" x="546" y="65" text-anchor="middle">NIC</text>
   <rect class="box faint" x="624" y="40" width="92" height="40" rx="8" fill="#eee9d8" />
   <text class="muted" x="670" y="65" text-anchor="middle">kernel</text>
   <rect class="box" x="748" y="40" width="92" height="40" rx="8" fill="#f4d6c0" />
   <text class="label" x="794" y="65" text-anchor="middle">app buf</text>
-
   <path class="line" d="M 136 60 L 152 60 L 152 35 L 276 35 L 276 60 L 292 60" marker-end="url(#rpath-arrow)" />
   <path class="wire" d="M 384 60 L 500 60" marker-end="url(#rpath-arrow)" />
   <text class="tag"  x="442" y="52" text-anchor="middle">network</text>
@@ -262,7 +246,6 @@ Direct Memory Access (RDMA):
       <path d="M 0 0 L 8 4.5 L 0 9 z" fill="#444" />
     </marker>
   </defs>
-
   <text class="who" x="38" y="22">SENDER</text>
   <rect class="host" x="38" y="34" width="324" height="52" rx="8" />
   <rect class="box" x="46"  y="40" width="92" height="40" rx="8" fill="#f4d6c0" />
@@ -272,11 +255,9 @@ Direct Memory Access (RDMA):
   <rect class="box" x="262" y="40" width="92" height="40" rx="8" fill="#d4e8d0" />
   <text class="label" x="308" y="65" text-anchor="middle">NIC</text>
   <path class="line" d="M 138 60 L 146 60 L 146 35 L 254 35 L 254 60 L 262 60" marker-end="url(#mrpath-arrow)" />
-
   <path class="wire" d="M 308 86 L 308 122" marker-end="url(#mrpath-arrow)" />
   <text class="tag" x="320" y="108">network</text>
   <text class="who" x="38" y="116">RECEIVER</text>
-
   <rect class="host" x="38" y="122" width="324" height="52" rx="8" />
   <rect class="box" x="262" y="128" width="92" height="40" rx="8" fill="#d4e8d0" />
   <text class="label" x="308" y="153" text-anchor="middle">NIC</text>
