@@ -82,8 +82,9 @@ This caption appears in the margin without a number.
 - Numbers should be sequential within a post
 - Place definitions nearby, typically right after the paragraph
 
-## ASCII Diagrams
+## Diagrams
 
+Either:
 Use Unicode box-drawing characters in ```txt blocks:
 
 ```txt
@@ -108,6 +109,8 @@ Character palette:
 Common patterns: architecture diagrams, memory layouts, timelines, tree
 structures. Aim for 60-80 char width max.
 
+Or, create SVG diagrams. See existing posts for prior art.
+
 ## Math
 
 LaTeX math is supported. Inline with `$...$`, display with `$$...$$`:
@@ -130,36 +133,18 @@ interesting to a smart colleague over coffee."
 - Use first person naturally: "I think", "we need to", "let's see".
 - Prefer longer, well-constructed sentences over short punchy ones. Vary rhythm.
 - Use sidenotes liberally for asides, citations, caveats, and figure captions.
+- After writing a paragraph, re-read and see what you can cut. The idea is the
+  minimal amount of text to communicate the core point. 
+- Prefer leaving the user's prose in place, or proposing minor content
+modifications around their existing style, to major rewrites, unless asked.
 
 ### Avoid
 
-- Em dashes (use periods or restructure)
 - Emojis (never)
 - Cliches: "the workhorse", "heavy lifting", "deep dive", "secret sauce"
 - Hollow transitions: "Let's dive in", "This is where things get interesting"
 - Staccato sentences piled for effect: "Latency matters. Speed is key."
 - Bulleted lists where prose would read better
-
-### Draft Tracking
-
-Include a status comment after frontmatter while drafting:
-
-```markdown
-<!--
-STATUS: Draft in progress
-
-OUTLINE:
-- [x] Introduction
-- [x] Setup
-- [ ] Main content
-- [ ] Conclusion
-
-NOTES:
-- Audience: technical generalists
--->
-```
-
-Remove before publishing.
 
 ## Inline Images
 
@@ -173,3 +158,14 @@ npm run dev      # Local dev server
 npm run build    # Production build
 npm run preview  # Preview production build
 ```
+
+## Committing and pushing
+
+When you commit and push, the working tree may hold changes beyond the work
+you did. Judge each stray change by whether it is user-visible, meaning it
+changes what a reader or visitor of the published site sees: a non-draft post,
+or code whose output changes. Ask before including user-visible changes.
+Everything else (posts marked `draft: true`, edits to `CLAUDE.md` or other
+instruction/config files, build-only changes with no output difference) gets
+committed and pushed alongside your work, and you then tell the user what you
+swept in.

@@ -1,0 +1,103 @@
+---
+title: 'Trading width for depth'
+description: |
+  A measurement aside to the economics of speculative decoding. The expert tax
+  there priced each token's experts as an independent draw. But speculated
+  tokens are a coherent run, not independent draws, so they activate fewer
+  distinct experts than an equal-width batch. What that routing locality is
+  worth, and what it isn't.
+pubDate: 'Jun 19 2026'
+stickyToc: true
+index: false
+draft: true
+---
+
+import WidthVsDepth from '../../components/specdec/WidthVsDepth.tsx'
+
+{/*
+STATUS: Stub. Section headings + topic sentences only. Refines (does not revise)
+the expert-tax model from profile-guided-adaptive-speculation; that post stands.
+
+ONE IDEA: a verify forward gets N token-positions one of two ways: a batch of N
+sequences (one decode token each) or one sequence speculating a run of N. Both
+pay ~the same MoE weight read. The run activates fewer distinct experts, because
+consecutive tokens route locally. So speculation's expert tax is lower than the
+coupon-collector model priced, exactly at small batch.
+
+KEY NUMBERS (cheap tier, Qwen3.6-35B-A3B, qualitative config, ~11k decode posns):
+  distinct experts / layer at N=8:  run-of-8 = 35.4 | batch-of-8 = 50.1 | uniform-CC = 56.7
+  N=16:                              run     = 55.1 | batch        = 81.5 | CC        = 100.9
+  -> run reads ~30% fewer distinct experts than the equal-width batch at N=8.
+  identity-vs-context split of the run<batch gap at N=8: ~41% token identity, ~59% context.
+  present in 39/40 layers; weakest at layer 0, strongest mid-stack.
+
+NULL = batch-of-N (real-popularity baseline). batch-to-CC gap is popularity skew;
+batch-to-run gap is locality. CC is just a dashed reference line.
+
+ROBUSTNESS / SCOPE:
+  - faithful tier (real MTP, incl. rejected drafts) confirms rejected drafts route
+    like accepted ones -> the correction is not an accepted-path artifact.
+  - B=1 / single-stream effect; washes out as batch grows (coupon-collector
+    reasserts). clustered batches route ~3.5-7% more alike (washes out a touch slower).
+  - NULL RESULT to include: target expert routing does NOT predict acceptance
+    (entropy AUC 0.50, discontinuity 0.46, vs draft_logprob 0.78 on ~18.7k candidates).
+
+FIGURE (data in hand): run-of-N vs batch-of-N distinct-experts-per-layer curves,
+uniform-CC dashed reference. Component TODO: <WidthVsDepth />. Optional second
+panel: per-layer profile or the identity/context bars.
+
+OPEN: broaden past `qualitative` to long-context configs (rerun collector, not new
+modelling); real per-step batch union at B>1 (needs cross-step request tracking).
+
+Campaign: ~/notes/docs/campaigns/adaptive-speculation/. Data + collectors:
+~/scratch/specdec-expert-routing/ (collect_routing.py, faithful_collect.py,
+replay_routing.py, analyze_*.py); banks on modal vol specdec-acceptance-data /routing, /faithful.
+*/}
+
+Last [time](https://fergusfinn.com/blog/profile-guided-adaptive-speculation/) I
+priced the cost of verifying a speculated token, and the expert tax was a big
+part of it. That model treated each token's choice of experts as an independent
+draw: a verify step over $N$ positions activates a coupon-collector's worth of
+distinct experts, and at small batch each extra speculated token drags in mostly
+fresh experts and amortises almost nothing. {/* TODO: one line linking to #the-expert-tax */}
+
+That independence assumption is the thing worth a second look. Speculated tokens
+are not independent draws. They are a contiguous run of one sequence's own text.
+
+## Batch of N, or a run of N
+
+There are two ways a single verify forward ends up pricing $N$ token-positions.
+{/* TODO: the comparison. batch-of-N (N sequences, one token each) vs run-of-N
+(one sequence, N speculated). both pay ~the same weight read; which activates
+more distinct experts? */}
+
+<WidthVsDepth client:load />
+
+{/* Run-of-N (depth) sits ~30% below batch-of-N (width); coupon-collector dashed
+ceiling. The two gaps at N=8 are annotated: popularity skew vs routing locality. */}
+
+## Why the batch is the right null
+
+{/* TODO: the batch IS the real-popularity baseline (it draws real routings), so
+batch-to-CC is popularity skew, batch-to-run is locality. No coupon-collector
+idealisation needed. Then identity-vs-context: replace each run token with another
+occurrence of the same token id; ~41% of the gap is identity, ~59% is genuine
+context locality, which is what makes it general rather than a repeated-token artifact. */}
+
+## What it's worth
+
+{/* TODO: at small batch the expert read dominates the verify memory term, so
+overcounting distinct experts by ~1.6x overstates speculation's cost exactly where
+the last post said the tax bites hardest. The priced policy should draft a touch
+deeper at small batch. Frame as a refinement of, not a correction to, the previous post. */}
+
+## What it isn't
+
+{/* TODO: honest scope.
+  - single-stream / small-batch effect; washes out as the batch grows.
+  - clustered real batches route a little more alike (sidenote), so it washes out
+    slightly slower than pure independence.
+  - and the question everyone asks: does routing predict which drafts get accepted?
+    Checked it. No. The acceptance signal is in the logprob, not in which experts fire. */}
+
+{/* TODO: appendix pointers — trace provenance, the faithful (rejected-draft) check. */}

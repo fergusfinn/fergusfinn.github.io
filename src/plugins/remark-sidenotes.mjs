@@ -12,8 +12,10 @@ import { toHtml } from 'hast-util-to-html'
  *   [>_id]: content - unnumbered sidenote definition (supports markdown)
  */
 export function remarkSidenotes() {
-  return (tree) => {
+  return (tree, file) => {
     const definitions = new Map()
+    const referencedKeys = new Set()
+    const danglingRefs = new Set()
 
     // First pass: collect all sidenote definitions
     // These are paragraphs starting with [>id]: or [>_id]:
@@ -86,16 +88,21 @@ export function remarkSidenotes() {
           const key = `_${match[1]}`
           const def = definitions.get(key)
           if (def) {
+            referencedKeys.add(key)
             newNodes.push(createSidenoteNode(def.content, true))
           } else {
+            danglingRefs.add(match[0])
             newNodes.push({ type: 'text', value: match[0] })
           }
         } else if (match[2] !== undefined) {
           // Numbered reference: [>id]
-          const def = definitions.get(match[2])
+          const key = match[2]
+          const def = definitions.get(key)
           if (def) {
+            referencedKeys.add(key)
             newNodes.push(createSidenoteNode(def.content, false))
           } else {
+            danglingRefs.add(match[0])
             newNodes.push({ type: 'text', value: match[0] })
           }
         }
@@ -117,6 +124,23 @@ export function remarkSidenotes() {
         return index + newNodes.length
       }
     })
+
+    // Warn on mismatches so dangling markers don't silently ship as prose.
+    const where = file?.path || file?.basename || 'unknown file'
+    if (danglingRefs.size > 0) {
+      console.warn(
+        `[remark-sidenotes] ${where}: reference(s) with no matching definition: ` +
+          `${[...danglingRefs].join(', ')} (rendered as literal text).`
+      )
+    }
+    const orphaned = [...definitions.keys()]
+      .filter((key) => !referencedKeys.has(key))
+      .map((key) => `[>${key}]`)
+    if (orphaned.length > 0) {
+      console.warn(
+        `[remark-sidenotes] ${where}: definition(s) never referenced: ${orphaned.join(', ')}.`
+      )
+    }
   }
 }
 
