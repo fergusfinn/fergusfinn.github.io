@@ -334,3 +334,33 @@ html {
 	display: none; /* GFM adds an hr by default */
 }
 
+/* Responsive figures: side-by-side SVG on desktop, stacked SVG on mobile */
+.fig-desktop {
+	display: block;
+}
+.fig-desktop svg {
+	display: block;
+	width: 100%;
+	height: auto;
+	max-width: 880px;
+	margin: 0 auto;
+}
+.fig-mobile {
+	display: none;
+}
+.fig-mobile svg {
+	display: block;
+	width: 100%;
+	height: auto;
+	max-width: 420px;
+	margin: 0 auto;
+}
+@media (max-width: 767px) {
+	.fig-desktop {
+		display: none;
+	}
+	.fig-mobile {
+		display: block;
+	}
+}
+

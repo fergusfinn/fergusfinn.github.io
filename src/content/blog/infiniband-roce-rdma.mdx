@@ -13,6 +13,7 @@ hardware works like this:
 
 [>_1]
 
+<div class="fig-desktop">
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 217" class="rdma-svg" font-family="'Berkeley Mono','Courier New',monospace" role="img" aria-label="The standard kernel path for sending data between two hosts, numbered step by step in two columns above a diagram. On each host the data is copied from the application buffer into a kernel buffer, with the CPU in the critical path, before the NIC DMAs it onto the wire.">
   <defs>
     <style>{`
@@ -83,6 +84,73 @@ hardware works like this:
   <path class="hot"  d="M 716 167 L 748 167" marker-end="url(#kpath-arrow-hot)" />
   <text class="copy" x="732" y="205" text-anchor="middle">copy</text>
 </svg>
+</div>
+
+<div class="fig-mobile">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 350" class="rdma-svg" font-family="'Berkeley Mono','Courier New',monospace" role="img" aria-label="The standard kernel path, stacked for mobile with the sender host above the receiver host. On each host the data is copied through a kernel buffer, with the CPU in the critical path; numbered steps list the sequence for each side.">
+  <defs>
+    <style>{`
+      .rdma-svg .label { font-size: 15px; fill: #2a2a2a; }
+      .rdma-svg .who   { font-size: 13px; fill: #777; letter-spacing: 0.08em; }
+      .rdma-svg .tag   { font-size: 13px; fill: #666; }
+      .rdma-svg .step  { font-size: 17px; fill: #2a2a2a; }
+      .rdma-svg .num   { fill: #b5532a; font-weight: 700; }
+      .rdma-svg .box   { stroke: #444; stroke-width: 1.4; }
+      .rdma-svg .host  { stroke: #bbb; stroke-width: 1; fill: none; }
+      .rdma-svg .line  { stroke: #444; stroke-width: 1.4; fill: none; }
+      .rdma-svg .hot   { stroke: #b5532a; stroke-width: 1.8; fill: none; }
+      .rdma-svg .wire  { stroke: #444; stroke-width: 1.8; fill: none; }
+      .dark .rdma-svg .label { fill: #e5e5e5; }
+      .dark .rdma-svg .step  { fill: #ddd; }
+      .dark .rdma-svg .who,
+      .dark .rdma-svg .tag   { fill: #aaa; }
+      .dark .rdma-svg .line,
+      .dark .rdma-svg .wire  { stroke: #bbb; }
+      .dark .rdma-svg .host  { stroke: #666; }
+    `}</style>
+    <marker id="mkpath-arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 8 4.5 L 0 9 z" fill="#444" />
+    </marker>
+    <marker id="mkpath-arrow-hot" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 8 4.5 L 0 9 z" fill="#b5532a" />
+    </marker>
+  </defs>
+
+  <text class="who" x="38" y="22">SENDER</text>
+  <text class="step" x="38" y="46"><tspan class="num">1</tspan>  App hands data to the kernel</text>
+  <text class="step" x="38" y="69"><tspan class="num">2</tspan>  Kernel copies into socket buffer</text>
+  <text class="step" x="38" y="92"><tspan class="num">3</tspan>  Kernel schedules the NIC</text>
+  <text class="step" x="38" y="115"><tspan class="num">4</tspan>  NIC DMAs from buffer onto wire</text>
+
+  <rect class="host" x="38" y="132" width="324" height="52" rx="8" />
+  <rect class="box" x="46"  y="138" width="92" height="40" rx="8" fill="#f4d6c0" />
+  <text class="label" x="92"  y="163" text-anchor="middle">app buf</text>
+  <rect class="box" x="154" y="138" width="92" height="40" rx="8" fill="#eee9d8" />
+  <text class="label" x="200" y="163" text-anchor="middle">kernel</text>
+  <rect class="box" x="262" y="138" width="92" height="40" rx="8" fill="#d4e8d0" />
+  <text class="label" x="308" y="163" text-anchor="middle">NIC</text>
+  <path class="hot"  d="M 138 158 L 154 158" marker-end="url(#mkpath-arrow-hot)" />
+  <path class="line" d="M 246 158 L 262 158" marker-end="url(#mkpath-arrow)" />
+
+  <path class="wire" d="M 308 184 L 308 216" marker-end="url(#mkpath-arrow)" />
+  <text class="tag" x="320" y="204">network</text>
+  <text class="who" x="38" y="210">RECEIVER</text>
+
+  <rect class="host" x="38" y="216" width="324" height="52" rx="8" />
+  <rect class="box" x="262" y="222" width="92" height="40" rx="8" fill="#d4e8d0" />
+  <text class="label" x="308" y="247" text-anchor="middle">NIC</text>
+  <rect class="box" x="154" y="222" width="92" height="40" rx="8" fill="#eee9d8" />
+  <text class="label" x="200" y="247" text-anchor="middle">kernel</text>
+  <rect class="box" x="46"  y="222" width="92" height="40" rx="8" fill="#f4d6c0" />
+  <text class="label" x="92"  y="247" text-anchor="middle">app buf</text>
+  <path class="line" d="M 262 242 L 246 242" marker-end="url(#mkpath-arrow)" />
+  <path class="hot"  d="M 154 242 L 138 242" marker-end="url(#mkpath-arrow-hot)" />
+
+  <text class="step" x="38" y="296"><tspan class="num">1</tspan>  NIC DMAs into a kernel buffer</text>
+  <text class="step" x="38" y="319"><tspan class="num">2</tspan>  Kernel copies it into app buffer</text>
+  <text class="step" x="38" y="342"><tspan class="num">3</tspan>  Kernel notifies the waiting app</text>
+</svg>
+</div>
 
 [>_1]: The standard path. On each host the data is copied through a kernel
 buffer (the orange hops), so the CPU is in the critical path on both ends.
@@ -111,6 +179,7 @@ Direct Memory Access (RDMA):
 
 [>_2]
 
+<div class="fig-desktop">
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 114" class="rdma-svg" font-family="'Berkeley Mono','Courier New',monospace" role="img" aria-label="The RDMA path for sending data between two hosts. The data goes straight from the application buffer to the NIC, across the network to the remote NIC, and into the remote application buffer, with the kernel on each host bypassed and no copy made.">
   <defs>
     <style>{`
@@ -165,6 +234,59 @@ Direct Memory Access (RDMA):
   <text class="muted" x="214" y="102" text-anchor="middle">bypassed</text>
   <text class="muted" x="670" y="102" text-anchor="middle">bypassed</text>
 </svg>
+</div>
+
+<div class="fig-mobile">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 192" class="rdma-svg" font-family="'Berkeley Mono','Courier New',monospace" role="img" aria-label="The RDMA path, stacked for mobile with the sender host above the receiver host. On each host the data goes straight between the application buffer and the NIC, bypassing the kernel with no copy, and crosses the network between the two NICs.">
+  <defs>
+    <style>{`
+      .rdma-svg .label { font-size: 15px; fill: #2a2a2a; }
+      .rdma-svg .who   { font-size: 13px; fill: #777; letter-spacing: 0.08em; }
+      .rdma-svg .tag   { font-size: 13px; fill: #666; }
+      .rdma-svg .box   { stroke: #444; stroke-width: 1.4; }
+      .rdma-svg .host  { stroke: #bbb; stroke-width: 1; fill: none; }
+      .rdma-svg .line  { stroke: #444; stroke-width: 1.4; fill: none; }
+      .rdma-svg .wire  { stroke: #444; stroke-width: 1.8; fill: none; }
+      .rdma-svg .faint { stroke: #aaa; stroke-width: 1.2; stroke-dasharray: 4, 3; fill-opacity: 0.35; }
+      .rdma-svg .muted { font-size: 15px; fill: #999; }
+      .dark .rdma-svg .label { fill: #e5e5e5; }
+      .dark .rdma-svg .who,
+      .dark .rdma-svg .tag   { fill: #aaa; }
+      .dark .rdma-svg .line,
+      .dark .rdma-svg .wire  { stroke: #bbb; }
+      .dark .rdma-svg .host  { stroke: #666; }
+      .dark .rdma-svg .faint { stroke: #777; }
+      .dark .rdma-svg .muted { fill: #888; }
+    `}</style>
+    <marker id="mrpath-arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 8 4.5 L 0 9 z" fill="#444" />
+    </marker>
+  </defs>
+
+  <text class="who" x="38" y="22">SENDER</text>
+  <rect class="host" x="38" y="34" width="324" height="52" rx="8" />
+  <rect class="box" x="46"  y="40" width="92" height="40" rx="8" fill="#f4d6c0" />
+  <text class="label" x="92"  y="65" text-anchor="middle">app buf</text>
+  <rect class="box faint" x="154" y="40" width="92" height="40" rx="8" fill="#eee9d8" />
+  <text class="muted" x="200" y="65" text-anchor="middle">kernel</text>
+  <rect class="box" x="262" y="40" width="92" height="40" rx="8" fill="#d4e8d0" />
+  <text class="label" x="308" y="65" text-anchor="middle">NIC</text>
+  <path class="line" d="M 138 60 L 146 60 L 146 35 L 254 35 L 254 60 L 262 60" marker-end="url(#mrpath-arrow)" />
+
+  <path class="wire" d="M 308 86 L 308 122" marker-end="url(#mrpath-arrow)" />
+  <text class="tag" x="320" y="108">network</text>
+  <text class="who" x="38" y="116">RECEIVER</text>
+
+  <rect class="host" x="38" y="122" width="324" height="52" rx="8" />
+  <rect class="box" x="262" y="128" width="92" height="40" rx="8" fill="#d4e8d0" />
+  <text class="label" x="308" y="153" text-anchor="middle">NIC</text>
+  <rect class="box faint" x="154" y="128" width="92" height="40" rx="8" fill="#eee9d8" />
+  <text class="muted" x="200" y="153" text-anchor="middle">kernel</text>
+  <rect class="box" x="46"  y="128" width="92" height="40" rx="8" fill="#f4d6c0" />
+  <text class="label" x="92"  y="153" text-anchor="middle">app buf</text>
+  <path class="line" d="M 262 148 L 254 148 L 254 123 L 146 123 L 146 148 L 138 148" marker-end="url(#mrpath-arrow)" />
+</svg>
+</div>
 
 [>_2]: RDMA. The NIC reads and writes the application buffers directly, so the
 kernel is bypassed and nothing is copied.
