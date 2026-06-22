@@ -1,7 +1,7 @@
 ---
 import type { CollectionEntry } from 'astro:content'
 import FormattedDate from '../components/FormattedDate.astro'
-import type { MarkdownHeading } from 'astro'
+import type { MarkdownHeading, ImageMetadata } from 'astro'
 import TableOfContents from '../components/TableOfContents.astro'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
@@ -23,6 +23,7 @@ const {
 	pubDate,
 	updatedDate,
 	headings,
+	slug,
 	filePath,
 	remarkPluginFrontmatter,
 	coverCredit,
@@ -41,6 +42,18 @@ const lastModified = dayjs(remarkPluginFrontmatter.lastModified)
 	.utc()
 	.format('D MMM YYYY')
 
+// Use the post's cover (if it has one) as the social/OG image, matching the
+// slug-based convention BlogCard uses. Falls back to the site default in
+// BaseHead when there is no cover.
+const blogImages = import.meta.glob<{ default: ImageMetadata }>(
+	'/src/assets/blogimages/**/*.{jpeg,jpg,png,gif}'
+)
+const coverImagePath = `/src/assets/blogimages/${slug}/cover.jpg`
+let ogImage: string | undefined
+if (blogImages[coverImagePath]) {
+	ogImage = (await blogImages[coverImagePath]()).default.src
+}
+
 // Render the limited markdown used in coverCredit (links + emphasis) to HTML.
 function renderCredit(md?: string) {
 	if (!md) return ''
@@ -55,7 +68,7 @@ function renderCredit(md?: string) {
 }
 ---
 
-<BaseLayout title={title} description={description}>
+<BaseLayout title={title} description={description} image={ogImage}>
 	<link slot="head" rel="preload" href={sourceSans3Latin} as="font" type="font/woff2" crossorigin />
 	<link slot="head" rel="preload" href={crimsonProLatin} as="font" type="font/woff2" crossorigin />
 	<main>

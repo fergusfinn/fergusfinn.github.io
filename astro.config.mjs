@@ -56,6 +56,9 @@ export default defineConfig({
     },
   },
   markdown: {
+    shikiConfig: {
+      langAlias: { cuda: 'cpp' },
+    },
     remarkPlugins: [remarkSidenotes, remarkReadingTime, remarkModifiedTime, remarkMath],
     rehypePlugins: [
       rehypeFigureTitle,

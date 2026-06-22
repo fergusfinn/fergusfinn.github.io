@@ -7,9 +7,10 @@ import { SITE_TITLE, SITE_DESCRIPTION } from '../consts'
 interface Props {
 	title?: string
 	description?: string
+	image?: string
 }
 
-const { title, description } = Astro.props
+const { title, description, image } = Astro.props
 
 import '@fontsource/source-sans-3'
 import '@fontsource-variable/jetbrains-mono'
@@ -23,6 +24,7 @@ import '@fontsource/noto-sans-math'
 		<BaseHead
 			title={title || SITE_TITLE}
 			description={description || SITE_DESCRIPTION}
+			image={image}
 		/>
 		<slot name="head" />
 	</head>
