@@ -14,10 +14,10 @@ if (typeof window !== 'undefined') {
 // heavier than geometric (it rises back above). A single α is a rough fit, not a
 // good one. Qwen3.6-35B-A3B, SPEED-Bench, temp 0.6.
 
-const MTP_SURV = [0.813, 0.618, 0.48, 0.389, 0.319, 0.256, 0.215, 0.178]
+const MTP_SURV = [0.779, 0.583, 0.444, 0.349, 0.279, 0.226, 0.185, 0.155]
 const DF_SURV = [
-  0.789, 0.578, 0.429, 0.331, 0.253, 0.206, 0.172, 0.136, 0.115, 0.09, 0.074, 0.065, 0.052, 0.045,
-  0.04,
+  0.772, 0.565, 0.42, 0.323, 0.256, 0.208, 0.17, 0.141, 0.12, 0.103, 0.089, 0.078, 0.068, 0.059,
+  0.051,
 ]
 const geo = (surv: number[]) => surv.map((_, i) => Math.pow(surv[0], i + 1))
 const pts = (surv: number[]) => surv.map((y, i) => ({ x: i + 1, y }))

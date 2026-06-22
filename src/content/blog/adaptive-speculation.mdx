@@ -1,0 +1,569 @@
+---
+title: 'Adaptive speculative decoding: picking draft lengths at runtime'
+description: |
+  A follow-on to the economics of speculative decoding, we run the inference
+  lab simulator on MTP & DFlash drafters with real acceptance data, and find
+  out whether adaptively choosing the draft length is worth it.
+pubDate: 'Jun 22 2026'
+stickyToc: true
+index: true
+draft: false
+coverCredit: 'Caravaggio, *The Cardsharps* (c. 1594), Kimbell Art Museum, via [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Caravaggio_%28Michelangelo_Merisi%29_-_The_Cardsharps_-_Google_Art_Project.jpg).'
+---
+
+import DrafterCrossover from '../../components/specdec/DrafterCrossover.tsx'
+import PricingEnvelope from '../../components/specdec/PricingEnvelope.tsx'
+import AcceptanceCurve from '../../components/specdec/AcceptanceCurve.tsx'
+import ParetoFrontier from '../../components/specdec/ParetoFrontier.tsx'
+
+Last [time](https://fergusfinn.com/blog/economics-of-speculative-decoding/) we
+discussed the changing economics of speculative decoding. The strategy for
+getting the most tokens out of a running model has become more complex as the
+"market" for tokens in the running inference engine has become more dynamic.
+The price of dropped draft tokens is nonzero, and even verified draft tokens
+don't come for free. The result is that there is space for mechanisms that
+choose how far we speculate at runtime, depending on dynamic, online policies.
+
+In this post, we want to take some steps to figure out what the optimal
+policy is for speculating in this fast-changing environment.
+
+## First, a new model
+
+Let's swap the model from the last post, for variety's sake.
+[Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) is a hybrid
+mixture-of-experts model from the Qwen team. 
+
+The expert half is pretty much the same as we worked out for DeepSeek Flash:
+see the [last
+post](https://fergusfinn.com/blog/economics-of-speculative-decoding/#the-expert-tax)
+for the full expert maths. Every layer routes each token to $8$[>1] of $256$
+experts plus one shared expert, which is the same coupon-collector picture
+from last time: at small batch each token tends to drag in its own fresh
+experts and amortises almost nothing, and the marginal token only rides
+resident experts for free once the batch size is large enough to have
+triggered most of them.
+
+[>1]: Contrast $6$ of $256$ for Deepseek Flash, the knee when all experts are
+active, such as it is, arrives sooner.
+
+The attention half is pretty different. Recent Qwen models have bet on 'hybrid
+attention': mixing both novel linear attention mechanisms (specifically,
+[GatedDeltaNet](https://arxiv.org/abs/2412.06464)) with traditional (GQA)
+attention. Qwen alternates its layers three to one: thirty of the forty are
+GatedDeltaNet linear-attention layers, and only ten are conventional full
+attention[>2]. The upshot is that the result from last time -- that MLA becomes
+compute bound when speculating -- doesn't apply: both the linear-attention and
+GQA layers have an arithmetic intensity that doesn't saturate at any
+reasonable draft length, so speculation keeps paying for long sequences.
+
+[>2]: This is another path to KV cache compression, different from DeepSeek's
+maybe more ambitious modifications of the standard attention mechanism.
+
+
+So for Qwen, it comes down to: the expert tax from last time, plus an attention bill that
+is quartered and, for most layers, flat in context. The full roofline maths is
+in the [appendix](#appendix-the-verifier-roofline).
+
+What we've left out, as we did before, is the cost of *producing* the
+speculated tokens.
+
+## The changing face of speculation
+
+There are two research threads that have changed how draft models are built:
+
+One major boost in the performance of draft models has been to condition them
+on richer outputs from the target model. Conditioning eases the training
+objective of the speculator, making higher accept lengths easier to
+achieve[>3]. 
+
+[>3]: Conditioning on the hidden states has a drawback though, in that the
+speculator must run in series with the target model (since it needs the hidden
+states in order to run. Generally, hidden states from closer to the end of the
+speculator model are more useful than those from the start, and the speculator
+can only run once they're available). So there's little potential for overlap
+between speculator and target.
+
+The other half of the story powering the step change in speculative decoding is
+the hardware sympathy of the drafter.
+[DFlash](https://arxiv.org/abs/2602.06036) makes use of the conditioning on the
+hidden states to make diffusion, which has generally given poor performance for
+pure text generation, work for speculation generation. The drafter workload is
+then much closer to its ridge point, produces its own tokens much faster, and
+the result is higher throughput for the same accept length.
+
+Both factors are driving massive improvements in throughput [>4].
+
+[>4]: See this great
+[work](https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/)
+from the Modal, SGLang, and Z Lab teams.
+
+We discussed last time that there are two costs to pay during speculation: the
+cost of the draft model, and the cost of the verify. We focussed on the cost of
+the verify, and held the draft cost as a constant fraction of the target model.
+
+This is bad modelling.
+
+## The drafter has its own roofline
+
+There are two different draft model architectures widely used at the moment.
+
+The [MTP](https://arxiv.org/abs/2412.19437) head Qwen ships is a single
+transformer layer that drafts autoregressively. This is the
+[EAGLE](https://arxiv.org/abs/2401.15077) lineage, but in this case pretrained
+alongside the model. To propose a draft of $\gamma$ tokens it runs $\gamma$
+times in sequence, each pass taking the last token and producing the next, each
+pass a single layer followed by a projection through the $248{,}320$-entry
+vocabulary. So the drafter's cost is linear in $\gamma$.
+
+[DFlash](https://arxiv.org/abs/2602.06036), on the other hand, is an
+eight-layer block-diffusion[>J] model that drafts a fixed block in one forward
+pass, every position at once. In the setup here that block is $D=16$. A policy
+can choose to verify fewer than those positions, but it still paid the draft
+cost of the full block.
+
+[>J]: Diffusion is a bit of an overloaded term here, the architecture and
+training methodology is pretty similar to the MLM loss from the
+[BERT](https://arxiv.org/abs/1810.04805) paper.
+
+Each has a cost to run at each point in batch-size and usable-depth space. At
+some points in that space, DFlash forward passes are cheaper, at some points
+EAGLE/MTP is cheaper:
+
+<DrafterCrossover client:load />
+
+The chart shows us only the cost of running the drafter. But different drafters
+are also different in their ability to generate acceptable tokens. In order to
+model it correctly, we curate
+[datasets](https://huggingface.co/datasets/Doubleword/qwen3.6-specdec-calibration)
+by running Qwen3.6-35B-A3B over the qualitative split of
+[SPEED-Bench](https://arxiv.org/abs/2604.09557) on [Modal](https://modal.com/)
+GPUs.
+
+We capture fine-grained per-round acceptance/rejection data, which
+we'll explore below. The headline: drafting against matched prompts at
+temperature $0.6$, DFlash commits more -- about $3.4$ tokens a round to MTP's
+$3.0$.[>10]
+
+[>10]: Matched collection on Qwen3.6-35B-A3B, over half a million draft
+rounds each: MTP commits $3.0$ of $8$ drafted, DFlash $3.4$ of $16$, DFlash
+ahead across the board -- $+13$ to $+29\%$ on predictable material (code,
+retrieval, maths, multilingual) and only roughly level on the hardest,
+highest-entropy categories (reasoning, STEM, humanities, roleplay). Details in the [acceptance
+appendix](#appendix-the-acceptance-data-measured). This is very
+dependent on training for the DFlash head -- in between gathering the data and
+publishing this post, the Modal team retrained the DFlash drafter model,
+promising [longer accept lengths, and higher
+throughput](https://modal.com/blog/spec-is-all-u-need).
+
+## A study in simulation
+
+With the cost model for the drafter in hand, and a detailed model of
+acceptance, we can begin to explore where its possible to profit from adaptive
+speculation. To do so without building the feature first, this kind of cost
+model has to go inside an engine, with a scheduler, a queue, and a stream of
+requests that come and go.
+
+I do that in a discrete-event simulator of a vLLM-shaped engine,
+[inference-lab](https://github.com/doublewordai/inference-lab). It's designed
+to split the difference between two different ways of experimenting with
+inference systems. The pen and paper analytics gives a per-step cost but no
+system: no batching, no queueing, no sense of load or data dependence. A real
+engine has all of that, but it also carries confounds that are frustrating to
+litigate case by case. Like boot-to-boot variation in which kernel shapes got
+captured, or CUDA graphs, availability of specific GPU SKUs, or the million
+other incidental but important parts of a running inference engine.
+
+
+In [inference-lab](https://github.com/doublewordai/inference-lab), each
+scheduler step, a batch is composed from a facsimile of vLLM's scheduler logic
+-- for aggregated, chunked prefill, we do their decode preference scheduling,
+but we also support disaggregated prefill. Then, the simulator prices that
+batch according to the modelling, and increments a timing counter. Then
+eviction, token generation, admission, KV cache management, etc. kick in to
+produce the next step. It's purely [event
+driven](https://en.wikipedia.org/wiki/Discrete-event_simulation), so it's really
+fast[>Q]. 
+
+[>Q]: It also compiles to WASM, so you can do fun stuff like this:
+https://inference-lab.doubleword.ai/.
+
+The resulting performance is a target to hit. It tells us, if the idea is
+right, what should we achieve once we sit down and write it. These kinds of
+simulations are increasingly powerful as agents get better at software
+development and research -- since we can use them to ground our intuitions on
+what should and shouldn't matter, such that we can communicate the achievable &
+unachievable constraints of our ideas to agents.
+
+The result measures some things, and models some things. Both the performance
+of the hardware, and the constraints of the inference engine's software are
+modelled, not measured. The acceptance is measured, and supplied as an input to
+the simulator. And then standard measures of achievable performance -- TPOT,
+TTFT, throughput, end to end latency -- are measured as the output of the
+simulation.
+
+
+## The headroom
+
+### How to pick a draft length at runtime
+
+When we pick a draft length $\gamma$, we're taking a bet: we pay in wall clock
+time to produce and verify $\gamma$ speculated tokens for the whole batch, and
+get back however many the target accepts. The right bet maximises total
+committed output per unit time, which is just steady-state throughput. Let
+$C(B,\gamma)$ be the wall-clock cost of the whole scheduler step for a batch of
+$B$ decode sequences, and let $\mathbb{E}[\text{accepted}\mid\gamma]$ be the
+per-sequence accepted draft tokens. Then a homogeneous draft depth has
+
+$$
+\mathrm{throughput}_B(\gamma) =
+\frac{B\left(\mathbb{E}[\text{accepted} \mid \gamma] + 1\right)}{C(B, \gamma)}.
+$$
+
+Each step the policy takes $\gamma^\star = \arg\max_\gamma
+\mathrm{throughput}_B(\gamma)$, over $\gamma$ from $0$ (don't speculate) up to the
+drafter's usable depth.
+
+This is basically just the speedup objective from [last
+time](https://fergusfinn.com/blog/economics-of-speculative-decoding/), . The
+idea is that now we're optimizing it directly, at runtime, by searching over
+$\gamma$ to find the optimum. The numerator is the average number of tokens
+that actually commit per sequence at each depth[>G]. The denominator is the
+real roofline cost of the whole step: the expert tax and the hybrid-attention
+bill for the live batch of $B$ sequences each verifying $\gamma+1$ tokens, plus
+the drafter charged according to its shape: $\gamma$ serial passes for MTP, or
+the fixed block pass for DFlash.
+
+[>G]: We did all simulations with real $\alpha_k$ per position (i.e. acceptance rate after
+$1$ token, after $2$ tokens etc.). Turns out we needn't have bothered:
+$\alpha_k$ is close enough to $\alpha^k$ that the throughput barely moves, even
+though the measured curves do bend off geometric (see the appendix).
+
+### Simulated priced $\gamma$ matches best-in-hindsight tuning
+
+The ultimate goal for a dynamic policy is to be better than hindsight. For each
+concurrency, the best fixed $\gamma$ is the one you would have chosen if you
+knew that exact operating point ahead of time. The simulator, running on the
+policy we've described, shows we can win on this metric[>_1]:
+
+<PricingEnvelope client:load />
+
+Represented as the standard throughput-latency curve, top right is good:
+
+<ParetoFrontier client:load />
+
+[>_1]: The best dynamic policy could switch between the heads at runtime and
+achieve the envelope of these curves at the cost of having both weights on
+disk. The actual weights of the spec models are pretty small: most of them are
+shared with each other and with the target model (i.e. the vocab head), so this
+is somewhat reasonable. The thing that would make it difficult is that both
+drafters need to 'keep up' -- i.e. extend their KV cache over time with new
+tokens, even when they're not speculating. 
+
+We're doing input sequence length (ISL) of one token, output sequence length
+(OSL) of 1024[>Z]. The chart is also a nice illustration of why DFlash is
+preferred even for similar accept lengths, the TPOT (per user latency) at
+matched throughput is substantially higher, because the diffusion model sits
+further up its roofline.
+
+This is nice! It tells us, if we build this speculation policy perfectly, then
+we need never never mistune our speculation parameter $\gamma$ against the
+workload. The throughput latency curve shows us (lighter curves) how wrong this
+can go: choosing not to speculate (close to optimal at batch size $4$) can
+decrease our TPOT at fixed throughput by a factor of 4 or more at batch size
+$128$.
+
+[>Z]: Chunked prefill adds some interesting quirks, since you have to figure
+out how to tradeoff additional speculation vs. additional prefill chunks (which
+are required, in order for requests to progress into the decode phase). ISL=1
+OSL=1024 sidesteps this by representing the disaggregated prefill setup, i.e.
+assume a perfectly paced and scaled prefiller on separate GPUs.
+
+## What to build
+
+To make it real, you have to figure out how to build this policy in real time.
+There are a couple of issues:
+
+1. **You don't know $\alpha_k^i$**. This one's pretty easy - you just do an EMA
+   estimate of the target acceptance rate over time, or use the drafter
+   confidence.
+2. **You don't know $C$**. This one's much harder. You can just use the roofline
+   model - since hopefully, the performance in the real engine is at least
+   correlated with the modelled performance, you can pick max $\gamma$ from max
+   modelled $\gamma$ without going too far off-policy. You can also build a
+   model of the real engine on real hardware, pointwise with batch size,
+   $\gamma$, either online EMA or with a profiling step. 
+
+Once you've done that what do you get? A couple of things:
+
+1. For homogeneous workloads: you don't ever have to tune the speculation
+   length, and so speculation can be enabled by default. 'Configuration tax' is
+   a real thing in inference engines: no matter what features you add to push
+   performance, they're useless unless people can find and enable them, and
+   even AI coding agents aren't very good at [doing
+   that](https://inferencebench.ai/).
+2. There's a win across the board for heterogeneous, bursty, dynamic workloads.
+   If your system lives between two operating points (i.e. half at concurrency
+   $1024$, half at concurrency $128$), any static $\gamma$ will be mistuned.
+   Even better, you can use the dynamism you've afforded yourself to accept
+   more flexible workloads: switch the same deployment from [Claude fast
+   mode](https://code.claude.com/docs/en/fast-mode) to regular speed just by
+   increasing batch size, without having to relaunch or reconfigure how you're
+   doing speculation.
+   
+It's gonna be hard to build though. The benefit of simulation is you don't have
+to think about implementation difficulty, the drawback is you haven't thought
+about implementation difficulty. If you can run speculation at any static
+length up to $\gamma_\mathrm{max}$, you need to figure out how to do CUDA
+graphs for each speculative shape. Estimators need
+to be updated online, accurately, account for hysteresis, outliers, warmups,
+JIT compilation, etc. Plus, in the model I've picked here, speculation has some
+gnarly complications: rewinding linear layers when you mis-speculate is not
+simple[>E].
+
+[>E]: Some nice work on making this easier: https://dao-lab.ai/blog/2026/replayssm/
+
+But, on the balance of the simulation evidence at least, it's worth it. 
+
+## Appendix: the setup
+
+### Verifier
+
+[Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B):
+3 linear layers then 1 full-attention layer, repeated: 30
+  [GatedDeltaNet](https://arxiv.org/abs/2412.06464) linear and 10 GQA
+  full-attention; every layer MoE
+  ($256$ routed $+ 1$ shared, $8$ per token); hidden $2048$, vocab $248{,}320$;
+  bf16 weights and KV.
+
+### Drafters
+
+Both use the target's $0.509$ B vocab head rather than shipping their own.
+
+| | [MTP](https://arxiv.org/abs/2412.19437) | [DFlash](https://huggingface.co/z-lab/Qwen3.6-35B-A3B-DFlash) |
+|---|---|---|
+| Drafter | autoregressive, 1 MoE layer + EAGLE fusion ($\approx 56$ M active) | block-diffusion, 8 dense SwiGLU-$6144$ layers + 5-layer fusion ($\approx 474$ M) |
+| Draft | $\gamma$ tokens over $\gamma$ passes | fixed $16$-block, one pass; verify may truncate |
+
+### Hardware
+
+Simulated: one B200, TP1/EP1: bf16 $2.25$, fp8 $4.5$, fp4 $9.0$ PFLOP/s; $8$
+TB/s HBM; $192$ GB.
+
+## Appendix: the verifier roofline
+
+These are computed costs, derived from the specs above and the hardware: the
+price the simulator charges each decode step.
+
+The expert term the same as [last
+time](https://fergusfinn.com/blog/economics-of-speculative-decoding/#the-expert-tax):
+coupon-collector routing, $k=8$ of $E=256$, knee at $E/k=32$. The
+attention is where the model differs.
+
+The ten full-attention layers behave in the standard attention way. They are
+grouped-query[>5], and the KV cache is re-read on every decode step and grows
+linearly with context. So the arithmetic intensity of the standard attention
+layers goes as $\sim 8T$, with $T$ the verify length.
+
+[>5]: $16$ query heads, $2$ key/value heads, head dimension $256$
+
+The thirty linear layers do not keep a growing cache at all. A GatedDeltaNet
+layer carries a fixed-size recurrent state, a small matrix per head[>6] that it
+updates in place as it consumes each token. The state summarises the whole
+history in constant space, so there is nothing that grows with context to
+re-read. Across the thirty layers that state comes to roughly 33 megabytes per
+sequence, re-read every decode step no matter how long the sequence is.
+
+[>6]: 128 by 128, across 32 value heads
+
+At short context the fixed $33$ megabytes of recurrent state dominate the
+attention memory reads, and the growing KV cache of the ten full-attention
+layers only overtakes it past about $1,600$ tokens of context. Above that, the
+bill still climbs, but on only a quarter of the layers, so it climbs four times
+more slowly than full dense-attention.
+
+### Details: the full-attention layers
+
+These are ordinary softmax attention, so last post's arithmetic-intensity model
+applies. For $T$ verify tokens over $S$ context tokens,
+
+$$
+\mathrm{AI} = \frac{f\,T S}{m_c\,S + m_q\,T},
+$$
+
+with $f$ the FLOPs per query-context pair, $m_c$ the bytes read per context
+token, and $m_q$ the bytes per query token. The layers are grouped-query
+($n_h = 16$ query heads, $n_\text{kv} = 2$ key/value heads, head dimension
+$d = 256$), and Qwen is not trained for an fp8 cache, so KV stays in bf16
+($b_\text{kv} = 2$) or we pay an accuracy cost:
+
+$$
+f = 4\,n_h d = 16{,}384, \qquad
+m_c = 2\,n_\text{kv}\,d\,b_\text{kv} = 2048\ \text{bytes}, \qquad
+m_q = n_h\,d\,b_q .
+$$
+
+At decode the KV read dominates the denominator ($m_c S \gg m_q T$), so the
+intensity rises with context to the plateau
+
+$$
+\mathrm{AI} \to \frac{f\,T}{m_c} = \frac{2\,n_h}{n_\text{kv}\,b_\text{kv}}\,T = 8\,T .
+$$
+
+Against a B200's bf16 ridge of $\approx 281$ these layers stay memory-bound
+until $T \approx 35$. This is different from MLA, which crossed the ridge at $T
+= 2$.
+
+### Details: the GatedDeltaNet layers
+
+Per layer, there is fixed state and per-token recurrence over it.
+The state $K^\top V$ is a $d_k \times d_v$ matrix per value head, read and
+updated once per step:
+
+$$
+m_\text{state} = n_v\,d_k\,d_v\,b_\text{state} = 32 \cdot 128 \cdot 128 \cdot 2
+\approx 1.0\ \text{MB per layer},
+$$
+
+independent of $S$. The full simulator state also includes the small
+convolution state. The compute is the gated delta-rule update plus the
+read-out:
+
+$$
+f_\text{rec} = c\,n_v\,d_k\,d_v \quad \text{per token}, \qquad c \approx 8\ \text{FLOPs},
+$$
+
+counting the rank-one write $\beta\,v k^\top$, the delta correction
+$\beta\,k(k^\top S)$, and the output $o = S^\top q$ (the exact constant follows
+from the GatedDeltaNet update equations). The intensity is the ratio,
+
+$$
+\mathrm{AI}_\text{gdn} = \frac{f_\text{rec}\,T}{m_\text{state}} =
+\frac{c}{b_\text{state}}\,T = 4\,T,
+$$
+
+with no $S$ in it. 
+
+### Comparing the two
+
+For speculation, it works out the same: both layers amortise a per-sequence
+memory read over verify width $\sim T$. Neither intensity falls with context,
+the softmax one rises with $S$ towards $8T$ and the linear one sits flat at
+$4T$.
+
+The difference is their maintained state. Per sequence the
+attention-memory read per step for Qwen-35b-a3b is:
+
+$$
+m(S) = \underbrace{20{,}480\,S}_{\text{full-attn KV}} +
+\underbrace{33.4\times10^6}_{\text{GDN state}}\ \text{bytes},
+\qquad
+S^\star = \frac{33.4\times10^6}{20{,}480} \approx 1{,}600\ \text{tokens}.
+$$
+
+Below $S^\star$ the fixed GatedDeltaNet state dominates the read; above it the
+dense-attention model does.
+
+## Appendix: the drafter roofline
+
+### MTP
+
+The MTP head is a single decoder layer: an EAGLE-style $2d \to d$ fusion
+projection, grouped-query attention ($\approx 18.9$ M params), and the layer's
+MoE MLP. It drafts autoregressively: a draft of $\gamma$ tokens is $\gamma$
+forward passes in series, one token produced per pass.
+
+The dense part read on every pass is the output head plus attention and fusion,
+$P_\text{dense} \approx 0.536$ B. The active expert work adds $(k+1)w$ params,
+with $k=8$ routed experts, one shared expert, and $w=3{,}145{,}728$ params per
+expert, so the active per-token pass is still $P_\text{act} \approx 0.564$ B.
+But the resident expert read grows with batch, with coupon-collector:
+
+$$
+e(B) = E\left(1 - \left(1 - \frac1E\right)^{Bk}\right), \qquad
+P_\text{res}(B) = P_\text{dense} + (1 + e(B))w .
+$$
+
+So its per-pass roofline is
+
+$$
+\mathrm{AI}_\text{MTP}(B) = \frac{P_\text{act}\,B}{P_\text{res}(B)},
+$$
+
+which is close to $B$ only while the resident expert set is still small. Across
+the batch range in the chart it remains below the B200 bf16 ridge of
+$\approx 281$, so the weight read dominates and the cost of a $\gamma$-deep draft
+is
+
+$$
+t_\text{MTP}(\gamma, B) \approx 
+\gamma \cdot \frac{2\,P_\text{res}(B)}{\text{BW}}
+$$
+
+At $B=1$ this is  $\sim \gamma \times 141\,\mu\text{s}$. 
+
+### DFlash
+
+DFlash is an eight-layer block-diffusion drafter. Its layers are dense (SwiGLU
+width $6{,}144$, grouped-query attention with $32$ query and $4$ key/value
+heads), so the eight come to $\approx 0.45$ B, and a small fusion that ingests
+hidden states from five of the target's layers ($5 \times 2048 \to 2048$) adds
+another $\approx 0.02$ B. It carries no head of its own either, borrowing the
+target's, so $P_\text{DF} = 0.47\,\text{B} + P_\text{head} \approx 0.98$ B. The
+deployed head here drafts a fixed $D=16$ block in one forward pass. Choosing a
+shallower $\gamma$ changes the verifier width, not the draft pass, so $BD$
+positions ride that one read:
+
+$$
+\mathrm{AI}_\text{DFlash} = \frac{2\,P_\text{DF}\,BD}{2\,P_\text{DF}} = BD,
+\qquad
+t_\text{DFlash}(B) =
+\max\!\left(\frac{2\,P_\text{DF}\,BD}{\text{peak}},\ \frac{2\,P_\text{DF}}{\text{BW}}\right), \quad D=16.
+$$
+
+At decode ($B = 1$) the block does not cross the ridge until $D \approx 281$,
+so the read dominates for every depth one would ever draft and the cost is
+
+$$
+t_\text{DFlash}(1) \approx \frac{1.96\ \text{GB}}{8\ \text{TB/s}} \approx 245\ \mu\text{s},
+$$
+
+flat in the requested verify depth $\gamma$ for this fixed block size.
+
+## Appendix: the acceptance data (measured)
+
+This is the only thing we measure on real hardware. The banks come from draft
+rounds, collected by running Qwen3.6-35B-A3B (on modal) as the target with the
+two drafters above, over the qualitative split of
+[SPEED-Bench](https://arxiv.org/abs/2604.09557) at temperature $0.6$, and
+logging every speculation round. The banks are published as the
+[`Doubleword/qwen3.6-specdec-calibration`](https://huggingface.co/datasets/Doubleword/qwen3.6-specdec-calibration)
+dataset.
+
+Each round records both the drafter's per-depth confidence (read off its
+draft-time logprobs) and the outcome -- the number of tokens the target actually
+committed. The curve below is the outcome side: how many drafted tokens survive
+verification at each depth. On a log axis a single $\alpha^k$ is a straight line,
+so the bend in each measured curve is its distance from geometric -- both decay
+faster than geometric early, and DFlash's deep tail is heavier than geometric,
+not lighter.
+
+<AcceptanceCurve client:load />
+
+## Appendix: the simulation
+
+Everything in *The headroom* is simulator output -- not measured.
+
+The figure in *The headroom* is a closed-loop sweep over one setup: decode-only
+(ISL $1$, OSL $1024$, so prefill is disaggregated), a single request size,
+concurrency $1$ to $2048$ in powers of two, fixed seed. Acceptance is replayed
+from the banks above, one round per decode step, so it carries the real
+per-round variation rather than a single $\alpha$.
+
+The sweep pits the best fixed draft length, chosen by simulating the E2E
+benchmark at every $\gamma$ and picking the best in hindsight, against the
+priced policy run once choosing live. The code is in
+[inference-lab](https://github.com/doublewordai/inference-lab); step-by-step
+reproduction of every figure here -- pull the dataset, export the banks, run the
+sweep -- is in
+[`examples/specdec/README.md`](https://github.com/doublewordai/inference-lab/blob/main/examples/specdec/README.md).
+
