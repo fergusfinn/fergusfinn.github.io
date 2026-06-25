@@ -1,0 +1,87 @@
+---
+export interface Props {
+	summary: string
+	open?: boolean
+}
+
+const { summary, open = false } = Astro.props
+---
+
+<details class="details" open={open}>
+	<summary class="details-summary">
+		<span class="details-marker" aria-hidden="true"></span>
+		<span class="details-summary-text">{summary}</span>
+	</summary>
+	<div class="details-body">
+		<slot />
+	</div>
+</details>
+
+<style>
+	.details {
+		margin: 1.5rem 0;
+		border-left: 3px solid var(--color-primary);
+		background: color-mix(in srgb, var(--color-primary) 4%, transparent);
+		border-radius: 0 4px 4px 0;
+	}
+
+	:global(.dark) .details {
+		border-left-color: var(--color-primary-dark);
+		background: color-mix(in srgb, var(--color-primary-dark) 7%, transparent);
+	}
+
+	.details-summary {
+		display: flex;
+		align-items: baseline;
+		gap: 0.5rem;
+		cursor: pointer;
+		padding: 0.6rem 0.9rem;
+		font-family: var(--font-sans);
+		font-size: 0.9rem;
+		line-height: 1.3;
+		color: var(--color-primary);
+		list-style: none;
+		user-select: none;
+	}
+
+	:global(.dark) .details-summary {
+		color: var(--color-primary-dark);
+	}
+
+	/* Hide the native disclosure triangle */
+	.details-summary::-webkit-details-marker {
+		display: none;
+	}
+
+	.details-marker {
+		flex: none;
+		width: 0;
+		height: 0;
+		border-style: solid;
+		border-width: 0.3rem 0 0.3rem 0.45rem;
+		border-color: transparent transparent transparent currentColor;
+		transform: translateY(0.05rem);
+		transition: transform 0.15s ease;
+	}
+
+	.details[open] .details-marker {
+		transform: rotate(90deg) translateX(0.05rem);
+	}
+
+	.details-summary-text {
+		font-weight: 500;
+	}
+
+	.details-body {
+		padding: 0 0.9rem 0.4rem;
+		font-size: 0.95rem;
+	}
+
+	/* Tuck a little air between the summary and the first block of body content */
+	.details-body :global(> :first-child) {
+		margin-top: 0.2rem;
+	}
+	.details-body :global(> :last-child) {
+		margin-bottom: 0;
+	}
+</style>
