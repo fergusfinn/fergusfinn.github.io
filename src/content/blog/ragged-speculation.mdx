@@ -1,0 +1,154 @@
+---
+title: 'Ragged speculation: per-sequence draft lengths'
+description: |
+  A follow-on to adaptive speculative decoding. The priced policy picks one
+  draft depth for the whole batch, but committed tokens are all-or-nothing and
+  the drafter already knows which rounds are which. Gating draft depth per
+  sequence on the drafter's own confidence -- and using the same knob for QoS
+  within a batch.
+pubDate: 'Jun 23 2026'
+stickyToc: true
+index: false
+draft: true
+---
+
+import AcceptLengthHist from '../../components/specdec/AcceptLengthHist.tsx'
+import AcceptJointHeatmap from '../../components/specdec/AcceptJointHeatmap.tsx'
+import GatingLadder from '../../components/specdec/GatingLadder.tsx'
+
+{/*
+STATUS: Stub. Branched out of trading-width-for-depth (the routing-locality
+measurement post) -- this is the policy half. Sequel to adaptive-speculation
+(Post 2): that post priced one homogeneous gamma for the WHOLE batch; this one
+goes ragged, per-sequence, gating on drafter confidence.
+
+TWO IDEAS:
+  1. Confidence gating (efficiency). Acceptance is all-or-nothing; the drafter's
+     per-depth logprob is calibrated about which kind of round it is; allocate
+     gamma_i per sequence to maximise AGGREGATE goodput. Sim shows ~10-30%
+     throughput win at various operating points. Figures: AcceptLengthHist,
+     AcceptJointHeatmap, GatingLadder. Math written.
+  2. QoS via ragged depth (fairness) -- TODO, mostly unwritten. SAME mechanism
+     (per-sequence gamma), DIFFERENT objective: hit per-request latency targets,
+     not aggregate goodput. The two rules are in TENSION -- gating says draft
+     deep where it'll be ACCEPTED; QoS says draft deep where the user is PAYING
+     for low latency, regardless of acceptance. That tension is the spine of the
+     section, and arguably the most original idea in the pile.
+
+HINGE FROM POST A: trading-width-for-depth ends on the null result (target expert
+routing does NOT predict acceptance, entropy AUC 0.50 vs draft_logprob 0.78). That
+null is this post's premise: the signal isn't in which experts fire, it's in the
+logprob -- so gate on the logprob.
+
+ENGINE REQ for both halves: efficient ragged speculation -- different verify
+widths per sequence in one batch (CUDA graphs per shape; rewinding linear-attention
+state on mis-speculation).
+
+Campaign: ~/notes/docs/campaigns/adaptive-speculation/. Gating ladder + accept data
+from the same banks as Post 2 (Doubleword/qwen3.6-specdec-calibration).
+*/}
+
+Last [time](https://fergusfinn.com/blog/adaptive-speculation/) we built a priced
+policy that chooses a draft length $\gamma$ at runtime. But it answers the same
+for the whole batch: under the global average acceptance curve, what single draft
+depth maximises goodput. That leaves something on the table, because the batch is
+not homogeneous.
+
+## Gating draft depth on confidence
+
+The number of committed tokens is not clustered around the mean, but more like
+all-or-nothing. On a given round the drafter tends to be right about almost
+everything it drafts or wrong almost at once. The average hides some interesting
+shape. Rounds are mostly 'near-misses' or 'clean sweeps':
+
+<AcceptLengthHist client:load />
+
+i.e. both kinds of drafters have a spike at their max committed tokens. (TODO:
+is this spike just the integral of like a fitted curve past the max off to
+infinity?)
+
+A single depth has to compromise
+between those two populations, deep enough to cash in the easy rounds, shallow
+enough not to verify the hard ones into the ground.
+
+Happily, the drafter has an opinion about which kind of round it is before the
+verifier runs. Plot the cumulative product of its per-depth confidences, against
+the length that actually committed. Diagonals are 'perfectly calibrated': i.e.
+the empirical accepted tokens at that length is the same as the confidence
+derived from the drafter logprobs. Below the diagonal, the drafter was
+overconfident, above, not confident enough.
+
+<AcceptJointHeatmap client:load />
+
+Write round $i$'s expected committed tokens at depth $\gamma$ from its own per-depth
+confidences $a_k^i$,
+
+$$
+m_i(\gamma) = 1 + \sum_{d=1}^{\gamma} \prod_{k=1}^{d} a_k^i .
+$$
+
+The homogeneous policy constrains the whole batch to one depth and maximises
+once,
+
+$$
+\gamma^\star =
+\arg\max_\gamma
+\frac{\sum_i m_i(\gamma)}{C(B, \gamma\mathbf{1})}.
+$$
+
+Really you can do better though, since the confidences are per sequence in the
+batch. For per-sequence gating, the object is the vector of depths
+$\mathbf{\gamma} = (\gamma_1,\ldots,\gamma_B)$:
+
+$$
+\mathbf{\gamma}^\star =
+\arg\max_{\mathbf{\gamma}}
+\frac{\sum_i m_i(\gamma_i)}{C(B, \mathbf{\gamma})}.
+$$
+
+There's a signal that we could use if we wanted to. Running the simulation
+tells us what that signal could be worth:
+
+<GatingLadder client:load />
+
+Perfect calibration is the case where we give the policy oracle information:
+i.e. it only ever drafts things that it knows ahead of time will be accepted.
+
+So there are big gains at small batch size: where the expert coupon-collector
+makes mis-speculation expensive. And then, as parts of the model go past the
+compute bound cliff, there are gains from acceptance gating, since speculation
+now only wins in those parts of the model that are compute bound. The
+batch-averaged signal washes out as the batch size increases -- i.e, you can't
+adaptively choose a global $\gamma$ from the confidences -- because the larger
+batch is more heterogeneous.
+
+There's something like a ~10-30% throughput win at various operating points by
+picking $\gamma_i$ dynamically per sequence, based on a cost model and drafter
+confidence -- provided already by existing models. If you want those wins,
+though, your engine needs to be able to efficiently raggedly speculate.
+
+## Speculation as a QoS knob
+
+Everything above spends the per-sequence draft depth to maximise *aggregate*
+goodput: draft deep where the tokens will be accepted, shallow where they won't.
+But the same ragged mechanism answers a different question just as well. Within
+one batch different requests can want different things -- a latency-sensitive
+request wants its tokens as fast as possible, a bulk request is happy to trade
+latency for throughput -- and per-sequence draft depth is a knob on exactly that
+tradeoff. Spending depth to maximise goodput and spending it to hit a latency
+target are not the same allocation, and where they disagree is the interesting
+part.
+
+{/* TODO: develop the tension. Goodput-gating draws depth toward sequences the
+drafter is confident about; an SLA policy draws it toward sequences that are
+behind their latency budget, even if their acceptance is mediocre. Sketch the
+objective: maximise goodput subject to per-request TPOT constraints, or a
+weighted blend. What does the simulator say it costs to honour the SLA vs the
+pure-goodput frontier? Does the same GatingLadder machinery extend, or does it
+need a per-request budget term in C? */}
+
+{/* TODO: appendix pointers -- trace provenance, the faithful (rejected-draft)
+check. The gating ladder is a closed-loop sweep that takes the priced policy as a
+baseline and adds the confidence signal in steps: one verify width for the whole
+batch, then a width per sequence, then the same allocation handed the true accept
+pattern instead of the confidence (the oracle). */}

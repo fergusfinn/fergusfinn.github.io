@@ -13,64 +13,39 @@ draft: true
 ---
 
 import WidthVsDepth from '../../components/specdec/WidthVsDepth.tsx'
-import GatingLadder from '../../components/specdec/GatingLadder.tsx'
-import AcceptLengthHist from '../../components/specdec/AcceptLengthHist.tsx'
-import AcceptJointHeatmap from '../../components/specdec/AcceptJointHeatmap.tsx'
 
-{/*
-STATUS: Stub. Section headings + topic sentences only. Refines (does not revise)
-the expert-tax model from profile-guided-adaptive-speculation; that post stands.
 
-ONE IDEA: a verify forward gets N token-positions one of two ways: a batch of N
-sequences (one decode token each) or one sequence speculating a run of N. Both
-pay ~the same MoE weight read. The run activates fewer distinct experts, because
-consecutive tokens route locally. So speculation's expert tax is lower than the
-coupon-collector model priced, exactly at small batch.
+Here's a fun interview question. Imagine you're running Qwen3.6-35B-A3B at
+batch size $1$, on a single GPU, and you decide want to increase throughput.
+For whatever reason, your engine can only work on $4$ tokens at a time. You
+have two choices[>1]: :
 
-KEY NUMBERS (cheap tier, Qwen3.6-35B-A3B, qualitative config, ~11k decode posns):
-  distinct experts / layer at N=8:  run-of-8 = 35.4 | batch-of-8 = 50.1 | uniform-CC = 56.7
-  N=16:                              run     = 55.1 | batch        = 81.5 | CC        = 100.9
-  -> run reads ~30% fewer distinct experts than the equal-width batch at N=8.
-  identity-vs-context split of the run<batch gap at N=8: ~41% token identity, ~59% context.
-  present in 39/40 layers; weakest at layer 0, strongest mid-stack.
+[>1]: Assume you don't have to prefill anything to batch, and that the
+sequences are short enough that the KV cache movement doesn't come into play.
 
-NULL = batch-of-N (real-popularity baseline). batch-to-CC gap is popularity skew;
-batch-to-run gap is locality. uniform-CC is just a dashed reference line.
-  - the batch curve IS the non-uniform coupon-collector E - sum_e (1-q_e)^N with
-    the measured per-expert inclusion freqs q_e: analytic matches empirical batch
-    to <0.5% (N=8: 49.9 vs 50.1; N=16: 81.2 vs 81.5). So the popularity gap is
-    fully explained, not hand-waved. Usage spread is ~4x (q_e in [0.014,0.055]
-    around uniform 1/32) -- the aux loss flattens routing only to 4x.
+1. Run at batch size $4$ by batching 4 random user sequences together.
+2. Running at batch size $1$, speculate out to draft length $4$, with
+   acceptance length $\alpha$. 
 
-ROBUSTNESS / SCOPE:
-  - faithful tier (real MTP, incl. rejected drafts) confirms rejected drafts route
-    like accepted ones -> the correction is not an accepted-path artifact.
-  - B=1 / single-stream effect; washes out as batch grows (coupon-collector
-    reasserts). clustered batches route ~3.5-7% more alike (washes out a touch slower).
-  - NULL RESULT to include: target expert routing does NOT predict acceptance
-    (entropy AUC 0.50, discontinuity 0.46, vs draft_logprob 0.78 on ~18.7k candidates).
+Which is better, assuming you only care about the number of tokens being output
+per second (not TPOT, i.e. you don't care about tokens per user per second)? In
+a perfectly implemented inference engine, which gives you the maximum output
+throughput?
 
-FIGURE (data in hand): run-of-N vs batch-of-N distinct-experts-per-layer curves,
-uniform-CC dashed reference. Component TODO: <WidthVsDepth />. Optional second
-panel: per-layer profile or the identity/context bars.
+Here's a sensible answer. 
 
-OPEN: broaden past `qualitative` to long-context configs (rerun collector, not new
-modelling); real per-step batch union at B>1 (needs cross-step request tracking).
+> Assuming that everything is memory bound, batching is always better for
+> $\alpha<1$, because there's no chance that a token added to the working set
+> by increasing the batch size will be rejected. You'd only choose speculative
+> decoding in this case if you wanted to improve the TPOT at the expense of
+> some global throughput. At $\alpha=1$, they have the same throughput.
 
-Campaign: ~/notes/docs/campaigns/adaptive-speculation/. Data + collectors:
-~/scratch/specdec-expert-routing/ (collect_routing.py, faithful_collect.py,
-replay_routing.py, analyze_*.py); banks on modal vol specdec-acceptance-data /routing, /faithful.
-*/}
+Here's something that's true sometimes:
 
-Last [time](https://fergusfinn.com/blog/profile-guided-adaptive-speculation/) I
-priced the cost of verifying a speculated token, and the expert tax was a big
-part of it. That model treated each token's choice of experts as an independent
-draw: a verify step over $N$ positions activates a coupon-collector's worth of
-distinct experts, and at small batch each extra speculated token drags in mostly
-fresh experts and amortises almost nothing. {/* TODO: one line linking to #the-expert-tax */}
+> Speculating 4 positions out produces, globally, more output tokens per
+> second, than running on a batch size of 4, even with $\alpha=0.9$.
 
-That independence assumption is the thing worth a second look. Speculated tokens
-are not independent draws. They are a contiguous run of one sequence's own text.
+Here's why.
 
 ## Batch of N, or a run of N
 
@@ -110,85 +85,5 @@ deeper at small batch. Frame as a refinement of, not a correction to, the previo
   - clustered real batches route a little more alike (sidenote), so it washes out
     slightly slower than pure independence.
   - and the question everyone asks: does routing predict which drafts get accepted?
-    Checked it. No. The acceptance signal is in the logprob, not in which experts fire. */}
-
-## Heterogeneous draft lengths: gating on confidence
-
-The priced policy so far answers the same for the whole batch: under the global
-average acceptance curve, what single draft depth maximises goodput. The number
-of committed tokens is not clustered around the mean, but more like
-all-or-nothing. On a given round the drafter tends to be right about almost
-everything it drafts or wrong almost at once. The average hides some interesting
-shape. Rounds are mostly 'near-misses' or 'clean sweeps':
-
-<AcceptLengthHist client:load />
-
-i.e. both kinds of drafters have a spike at their max committed tokens. (TODO:
-is this spike just the integral of like a fitted curve past the max off to
-infinity?)
-
-A single depth has to compromise
-between those two populations, deep enough to cash in the easy rounds, shallow
-enough not to verify the hard ones into the ground.
-
-Happily, the drafter has an opinion about which kind of round it is before the
-verifier runs. Plot the cumulative product of its per-depth confidences, against
-the length that actually committed. Diagonals are 'perfectly calibrated': i.e.
-the empirical accepted tokens at that length is the same as the confidence
-derived from the drafter logprobs. Below the diagonal, the drafter was
-overconfident, above, not confident enough.
-
-<AcceptJointHeatmap client:load />
-
-Write round $i$'s expected committed tokens at depth $\gamma$ from its own per-depth
-confidences $a_k^i$,
-
-$$
-m_i(\gamma) = 1 + \sum_{d=1}^{\gamma} \prod_{k=1}^{d} a_k^i .
-$$
-
-The homogeneous policy constrains the whole batch to one depth and maximises
-once,
-
-$$
-\gamma^\star =
-\arg\max_\gamma
-\frac{\sum_i m_i(\gamma)}{C(B, \gamma\mathbf{1})}.
-$$
-
-Really you can do better though, since the confidences are per sequence in the
-batch. For per-sequence gating, the object is the vector of depths
-$\mathbf{\gamma} = (\gamma_1,\ldots,\gamma_B)$:
-
-$$
-\mathbf{\gamma}^\star =
-\arg\max_{\mathbf{\gamma}}
-\frac{\sum_i m_i(\gamma_i)}{C(B, \mathbf{\gamma})}.
-$$
-
-There's a signal that we could use if we wanted to. Running the simulation
-tells us what that signal could be worth:
-
-<GatingLadder client:load />
-
-Perfect calibration is the case where we give the policy oracle information:
-i.e. it only ever drafts things that it knows ahead of time will be accepted.
-
-So there are big gains at small batch size: where the expert coupon-collector
-makes mis-speculation expensive. And then, as parts of the model go past the
-compute bound cliff, there are gains from acceptance gating, since speculation
-now only wins in those parts of the model that are compute bound. The
-batch-averaged signal washes out as the batch size increases -- i.e, you can't
-adaptively choose a global $\gamma$ from the confidences -- because the larger
-batch is more heterogeneous.
-
-There's something like a ~10-30% throughput win at various operating points by
-picking $\gamma_i$ dynamically per sequence, based on a cost model and drafter
-confidence -- provided already by existing models. If you want those wins,
-though, your engine needs to be able to efficiently raggedly speculate.
-
-{/* TODO: appendix pointers — trace provenance, the faithful (rejected-draft)
-check. The gating ladder is a closed-loop sweep that takes the priced policy as a
-baseline and adds the confidence signal in steps: one verify width for the whole
-batch, then a width per sequence, then the same allocation handed the true accept
-pattern instead of the confidence (the oracle). */}
+    Checked it. No. The acceptance signal is in the logprob, not in which experts fire.
+    (This null is the bridge into the ragged-speculation post -- gate on the logprob.) */}

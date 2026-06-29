@@ -1,11 +1,11 @@
 ---
-title: 'What happens when you run a GPU kernel'
+title: 'What happens when you run a CUDA kernel'
 description: |
   Tracing one vector-add kernel from nvcc all the way down to the warps that
   execute it.
 coverCredit: 'Salomon de Caus''s pinned-cylinder water organ, engraving from [*Les Raisons des Forces Mouvantes*](https://commons.wikimedia.org/wiki/File:Les_raisons_des_forces_mouuantes_auec_diuerses_machines_tant_vtilles_que_plaisantes_aus_quelles_sont_adioints_plusieurs_desseings_de_grotes_et_fontaines_%281615%29_%2814740673966%29.jpg) (1615).'
 pubDate: 'Jun 21 2026'
-index: false
+index: true
 draft: false
 stickyToc: true
 ---
@@ -55,7 +55,13 @@ c[0]=2.000000 c[n-1]=2.000000
 Telling you that involved tens of millions of CPU instructions, a couple of
 device files, nine hundred ioctls, and one memory-mapped doorbell register. In
 this post, we'll follow this one kernel from the code down to the warps, and
-back up to the answer.
+back up to the answer[>D].
+
+[>D]: An aside, this post is an instance of the 'legibility transition' that
+agents have engendered. There really is very little about computers you can't
+find out with curiosity and (machine-enhanced) persistence. An interesting
+discussion of the implications of legibility for what AI can help us to know
+[here](https://resobscura.substack.com/p/ai-legibility-archives-future-of-research).
 
 ## Compiling our program with `nvcc`
 
@@ -217,67 +223,38 @@ $ readelf -S vadd
 ...
 ```
 
-The `vadd` binary that nvcc spits out is one file containing host code, a
-complete ELF object for an Ada GPU, and a compressed copy of the PTX it came from
-(as verified by `cuobjdump` marking the PTX section as `compressed` inside the fatbin). 
+The `vadd` binary that nvcc spits out is a single executable containing host
+code, a complete ELF object containing the Ada SASS, and a copy of the PTX.
+Because PTX is verbose plain text, `nvcc` compresses it by default to keep the
+binary size small; the driver will only decompress and JIT-compile it if the
+binary is run on an architecture that the pre-compiled SASS doesn't cover.
 
-## How NVCC teaches your binary how to talk to the GPU
+## How the host triggers the GPU
 
-The GPU code is sitting in `.nv_fatbin` inside `./vadd`. When you run `./vadd`
-on the host — how does the GPU get told about it? When do the different bits
-start running?
+The compiled GPU machine code is now sitting inert inside the `.nv_fatbin`
+section of our `./vadd` executable. When you launch the program on the host, we
+have to bridge two worlds: the host CPU, and the GPU sitting across the PCIe
+bus. 
 
-The story happens in three places:
+To set up a host binary that knows how to cross the bridge, the frontend
+compiler (`cudafe++`) inserts a hidden constructor into your code, running
+before the `main` function starts. Its job is to register our embedded
+fatbinary with the CUDA runtime and record a mapping that the runtime will
+later use: associating the host-side function pointer `vadd` with the compiled
+device kernel's mangled name in the fatbin.
 
-1. At process startup, when CUDA's generated constructor registers the fatbin with
-   the runtime.
-2. During the first CUDA runtime call in this program, `cudaMalloc`, when the runtime
-   and driver may initialize the context and open device files.
-3. The later `vadd<<<...>>>` call, when kernel work is actually submitted to the
-   GPU.
+When the compiler encounters `vadd<<<4096, 256>>>(da, db, dc, n)`, it replaces
+that high-level expression with a generated host launch stub. This stub packs
+our kernel arguments into a buffer in host memory. The pointers `da`, `db`,
+`dc` and the integer `n` are aligned at byte offsets `0`, `8`, `16`, and `24`
+[>5]:
 
-The start-of-process work is done by a constructor that `cudafe++` — the
-front-end tool that splits your `.cu` into host and device halves and emits the
-host-side glue — splices into the generated `vadd.cudafe1.stub.c`. It looks
-like this:
-
-```c
-// from vadd.cudafe1.stub.c
-...
-static void __sti____cudaRegisterAll(void) __attribute__((__constructor__));
-
-static void __nv_cudaEntityRegisterCallback(void **__T4) {
-    // (two managed-runtime bookkeeping calls, elided)
-    __cudaRegisterEntry(__T4, (void(*)(const float*, const float*, float*, int))vadd,
-                        _Z4vaddPKfS0_Pfi, -1);
-}
-
-static void __sti____cudaRegisterAll(void) {
-    __cudaRegisterBinary(__nv_cudaEntityRegisterCallback);
-}
-```
-
-The first line is the forward declaration, the last function is its definition.
-Giving `cudaRegisterAll` the `__attribute__((__constructor__))` bit means it
-runs before the `main` function in your program. When called, it invokes
-`__cudaRegisterBinary`, which registers your device binary with the CUDA
-runtime and is handed a callback. That callback is immediately called, invoking
-`__cudaRegisterEntry`, which records a mapping the runtime needs for the rest of
-the program's life: between the host-side function pointer `vadd` — the address
-the linker gave your symbol — and the device kernel whose mangled name is
-`_Z4vaddPKfS0_Pfi`. 
-
-This transformation is what makes it possible to write `vadd<<<...>>>(...)` in
-what looks like ordinary C code. The generated constructor has already
-registered a mapping from the host-side `vadd` symbol to the compiled device
-entry point. The later host stub uses that bridge, and an ordinary-looking C++
-call on the CPU becomes a request to launch the right GPU function.
-
-That host code expands to the following:
+[>5]: These offsets are the constant bank offsets `0x160`, `0x168`, `0x170`,
+and `0x178` that we saw our SASS machine code reading from constant bank 0
+earlier. 
 
 ```c
 // from vadd.cudafe1.stub.c
-...
 void __device_stub__Z4vaddPKfS0_Pfi(const float *__par0, const float *__par1,
                                      float *__par2, int __par3) {
     __cudaLaunchPrologue(4);
@@ -289,27 +266,16 @@ void __device_stub__Z4vaddPKfS0_Pfi(const float *__par0, const float *__par1,
 }
 ```
 
-The four arguments to the kernel are packed into a flat buffer at byte offsets
-0, 8, 16, and 24, and then the kernel itself is launched. Here the arguments
-are still in host memory, in a buffer the runtime is assembling, and the copy
-across happens later, when the launch reaches the card.
+Once the arguments are packed, the stub calls `__cudaLaunch`, passing it
+the memory address of the host-side dummy `vadd` function. Because this host
+function is just an empty shell on the CPU, its host memory address serves as a
+lookup key. The runtime queries its registration table with this address to
+find the corresponding device-side symbol name, and then crosses the boundary
+into the closed-source user-mode driver (`libcuda.so.1`)[>6] to initiate the
+launch of that kernel.
 
-<Details summary="Why these offsets">
-Those are the same four values the disassembled kernel read out of constant
-bank 0 earlier, at `0x160`, `0x168`, `0x170`, and `0x178`: on the GPU the
-argument buffer starts at `0x160`, with the launch geometry and ABI values
-filling the bytes below it, so the host's offset 0 becomes `0x160`, offset 8
-becomes `0x168`, and so on. 
-</Details>
-
-
-`__cudaLaunch` then calls `cudaLaunchKernel`. `cudaLaunchKernel` is the break
-at which we hand over between the two layers of CUDA: the **runtime**, the
-`cuda*` API we've been calling, and the **driver** beneath it. 
-
-The runtime opens the user-mode side of the driver on demand the first time you
-touch the GPU. In this program that happens before the launch line, but you can
-still catch it with `strace`:
+The runtime opens this driver dynamically on the first GPU call in our program,
+which we can catch using `strace`:
 
 ```txt
 $ strace -f -e trace=openat ./vadd
@@ -318,28 +284,23 @@ openat(..., "/lib/x86_64-linux-gnu/libcuda.so.1", O_RDONLY|O_CLOEXEC) = 3
 ...
 ```
 
-When `vadd` runs, the runtime's `cudaLaunchKernel` calls the driver's
-`cuLaunchKernel`[>5]. This is the bit where we don't have source - `libcuda` is
-the closed source bit of the driver. We'll resurface into the light of open
-source in the [kernel
-module](https://github.com/NVIDIA/open-gpu-kernel-modules), happily, but then
-back into the darkness on the device side.
+When this first call is performed, a 'context' is created, containing all the
+infrastructure the driver needs to talk to the device, including the _channel_
+through which the CPU speaks to the GPU. We'll talk more about that in the next
+section.
 
-[>5]: The usermode bit of the driver comes with the GPU's kernel driver, not
+At this stage, the compiled machine code still hasn't reached the GPU. Since
+CUDA 12.2, module loading is lazy by default[>7]—the driver defers uploading a
+kernel's SASS cubin to the card's memory until the very first time that
+specific kernel is actually launched. 
+
+[>6]: The usermode bit of the driver comes with the GPU's kernel driver, not
 with the CUDA toolkit: the `libcuda.so.1` from the `strace` resolves to
 `libcuda.so.590.48.01`, the driver release on this machine.
 
-
-So far, the fatbin hasn't reached the GPU: registration at startup does not
-push anything onto the card. Since CUDA 12.2, module loading is lazy by
-default[>6]: the cubin for a given kernel is only loaded into a GPU context the
-first time that kernel is actually launched. 
-
-[>6]: Controlled by `CUDA_MODULE_LOADING`. It shipped opt-in in CUDA 11.7 and
-defaulted to `EAGER` for years; the 12.x series flipped the default to `LAZY`.
-You can force either, which is
-occasionally useful when you want all the load cost paid up front rather than
-smeared across first-launches.
+[>7]: Controlled by `CUDA_MODULE_LOADING`. It shipped opt-in in CUDA 11.7 and
+defaulted to `EAGER` for years; the 12.x series flipped the default to `LAZY`
+(which can be overridden if you want loading costs paid up front).
 
 Underneath `libcuda` sits the kernel-mode driver, `nvidia.ko`, which `libcuda`
 reaches by invoking `ioctl` on device files. When `cuLaunchKernel` finally
@@ -350,18 +311,44 @@ module. What follows is the mechanics of that conversation.
 
 A GPU does not take function calls like a CPU does. There is no entry point to
 jump to, and no stack to push arguments onto from the CPU. The GPU sits across
-a PCIe bus and reads a stream of commands out of host memory. 
+a PCIe bus and reads a stream of driver commands out of host memory. Everything
+`cuLaunchKernel` does past this point is in service of getting one fully formed
+launch command into that stream, and then telling the GPU it has done so.
 
-Everything `cuLaunchKernel` does past this point works at getting one launch
-command into that stream, and then telling the GPU where to find it.
+The first thing that needs to be done is loading the GPU code onto the device.
+The first time you run `vadd`, the driver copies across the kernel's code: it
+allocates a buffer and copies the SASS in. 
 
-Before any of that, the code itself has to be loaded. The first time you run
-`vadd`, the driver copies the kernel's code onto the GPU: it allocates a buffer
-and copies the SASS in. Later launches reuse it.
+Once the code is on the GPU, the CPU needs to get the GPU to read it and start
+executing it. It does so via a complex dance, across host and device memory.
+Both the host and the GPU can map regions of each other's memory spaces, but
+accesses across the PCIe bus pay a penalty. To achieve a kernel launch, both
+write to various structures, living across both spaces. These structures
+comprise the _channel_ — the work queue that runs the GPU's operations.
 
-There are bits of state in two places: in host RAM, and in VRAM. Both the host
-and the GPU can map regions of each other's memory spaces, but accesses across
-the PCIe bus pay a penalty. 
+There are two important such structures living in host RAM: the **pushbuffer**,
+and the **GPFIFO**, representing between them the list of work the GPU has to
+perform. 
+
+The **pushbuffer** is a region of memory into which the driver writes commands
+to the GPU, called *methods*. A method is a register address and a value in
+the GPU's native command encoding — the pair defines what action the GPU should
+perform.
+
+The **GPFIFO** is a ring buffer of pointers, used by the GPU & CPU to
+coordinate what the GPU still needs to read, and what it's read already. Each
+entry in the GPFIFO is made up of two 32-bit words, describing a span of the
+pushbuffer[>8] `(base, length)`. 
+
+The GPU continually walks the GPFIFO to find work. Between the driver and the
+GPU, two cursors need to be maintained: `GP_GET` (how far the GPU has
+consumed), and `GP_PUT` (how far the driver has produced). Both cursors live
+in USERD, a small per-channel structure that here sits in device memory. To
+launch a kernel, the driver fills a pushbuffer span with the relevant methods,
+points a GPFIFO entry at it, and advances `GP_PUT`. Once the GPU consumes the
+entry, it advances `GP_GET`.
+
+[>8]: In this case, base is a GPU virtual address pointing to host memory
 
 [>_1]
 
@@ -449,56 +436,39 @@ the PCIe bus pay a penalty.
 </svg>
 </div>
 
-[>_1]: Where the different pieces live. More below.
+[>_1]: Where the different pieces live. 
 
-In host RAM, there are two important things: the **pushbuffer**, and the
-**GPFIFO**.
+Our launch is triggered by a burst of methods, first
+[`SET_INLINE_QMD_ADDRESS_A/B`](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/590.48.01/src/common/sdk/nvidia/inc/class/clc6c0.h#L403-L409)[>9]
+followed by a run of [`LOAD_INLINE_QMD_DATA`](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/590.48.01/src/common/sdk/nvidia/inc/class/clc6c0.h#L409-L410).
+These methods serve to stream an object called the "Queue Meta Data" (**QMD**)
+into the pushbuffer.
 
-The **pushbuffer** is a region of memory, visible to both CPU and GPU, into
-which the driver writes GPU commands, called *methods*. A method is a register
-address and a value in the GPU's native command encoding. The driver fills a
-stretch of pushbuffer with a batch of methods. 
+[>9]: How I know it's this method, given that `libcuda` is closed source: see
+the [appendix](#appendix-how-to-look-inside-the-launch).
 
-The **GPFIFO** is a ring buffer of pointers. Each entry is two 32-bit
-words, describing a GPU address region[>7] `(base, length)`, indicating a span
-of the pushbuffer. The GPU walks the GPFIFO to find work. Between the driver
-and the GPU, two cursors need to be maintained: `GP_GET` how far the GPU has
-consumed, and `GP_PUT`, how far the driver has produced. Both live in USERD, a
-small per-channel[>8] structure that on this card sits in VRAM. The driver advances
-`GP_PUT` when it adds an entry; the GPU advances `GP_GET` as it consumes one.
+The QMD is the launch descriptor for a compute grid. It holds the grid and
+block dimensions — our 4096 and 256, from the `.cu` code — the registers per
+thread and shared memory it needs, and two addresses: the program's start (the
+SASS the first launch loaded into GPU memory) and the constant bank holding the
+kernel's arguments. That bank is where the arguments the host stub packed land:
+the driver copies them in and records the bank's address in the QMD. The QMD
+tells the GPU where the SASS is, how to turn that SASS into a parallel program,
+and where to signal its completion of that program.
 
-[>7]: A GPU virtual address pointing to host memory
+Everything is now in place for the GPU to start running. The problem is that
+the GPU's **host engine**[>10] hasn't acted: it doesn't watch the cursor on modern
+cards[>11], so the change to `GP_PUT` just sits there until something tells the
+engine to look.
 
-[>8]: A channel is a submission queue — its own pushbuffer, GPFIFO, and USERD.
+[>10]: The part of the GPU's control logic that interfaces with the host.
 
-To launch a kernel, the driver fills a pushbuffer span with the methods, points
-a GPFIFO entry at it, and advances `GP_PUT`. The method that triggers the launch
-is an inline-QMD burst: [`SET_INLINE_QMD_ADDRESS_A/B`](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/590.48.01/src/common/sdk/nvidia/inc/class/clc6c0.h#L403-L409)[>9]
-set where the descriptor lands, and a run of `LOAD_INLINE_QMD_DATA` methods
-streams the QMD itself into the pushbuffer.
-
-[>9]: How I know it's this method, and that the launch is inline rather than
-the equivalent out-of-line `SEND_PCAS`: see the
-[appendix](#appendix-looking-inside-the-launch).
-
-The **QMD**, the Queue Meta Data, is the launch descriptor for a compute grid.
-It holds the grid and block dimensions — our 4096 and 256, from the `.cu`
-code — the registers per thread and shared memory it needs, and two
-addresses: the program's start (the SASS the first launch loaded into GPU
-memory) and the constant bank holding the kernel's arguments, the `c[0x0][…]`
-reads we saw in the disassembly.
-
-Everything is now in place. But the host engine, the part of
-the GPU's control logic that interfaces with the host, hasn't acted: it doesn't
-watch the cursor on modern cards[>10], so the new `GP_PUT` just sits there until
-something tells the engine to look.
-
-It is told through the **doorbell**. The GPU maps a small window of its
+It is told to look through the **doorbell**. The GPU maps a small window of its
 registers into the process, and one of them is the doorbell; the driver writes
 the channel's *work-submit token* to it. The token tells it which channel has
 new work.
 
-[>10]: They used to: older GPUs [snooped USERD](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/590.48.01/src/common/unix/nvidia-push/src/nvidia-push.c#L421-L438),
+[>11]: They used to: older GPUs [snooped USERD](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/590.48.01/src/common/unix/nvidia-push/src/nvidia-push.c#L421-L438),
 so writing `GP_PUT` was enough. Turing and later don't, so the driver rings the
 doorbell instead.
 
@@ -508,45 +478,44 @@ of it by DMA. When it reaches the compute method carrying our QMD, it hands
 that descriptor to the "compute work distributor", about which more shortly. 
 
 From the CPU's side the launch is done: `cuLaunchKernel` returned the moment
-the doorbell was rung.
+the doorbell was rung. The call was asynchronous, so control returns to the
+program and the CPU runs on while the GPU works; we pick the host side back up
+once the kernel has run.
+
+It's time for the GPU to start doing its job.
 
 ## Instruction by instruction
 
-The host engine hands the QMD to the **compute work distributor**[>11]. There is
+The host engine hands the QMD to the **compute work distributor**[>12]. There is
 one of these on the whole GPU. There is one linear list of SASS instructions in
 VRAM, and the compute work distributor + the QMD is the first step in telling
 the hardware how to make that linear list of thread instructions into a
 massively parallel program across all the **Streaming Multiprocessors** (SMs).
 
-It does so by assigning entire **blocks** of threads to individual SMs, using
-the resource requirements defined in the QMD. Once a block is resident on an
-SM, the hardware carves its threads into independent 32-lane **warps**. Inside
-the SM, local warp schedulers fetch instructions from the SASS stream for each
-warp, executing them in parallel across the datapath. As blocks complete and
-retire, the compute work distributor refills the vacant SM slots with fresh
-blocks from the grid.
-
-[>11]: Sometimes still called the GigaThread Engine
+[>12]: Sometimes still called the GigaThread Engine
 
 In our journey down the stack, our compute work distributor now has a QMD
 describing 4096 blocks of 256 threads. The card we are targeting is a GeForce
-RTX 4090, built on the Ada Lovelace AD102 architecture. While a full AD102 die
-contains 144 Streaming Multiprocessors (SMs), the 4090 has a slightly harvested[>12]
-chip with **128 SMs** enabled. The distributor's task is to keep all 128 of them
-saturated.
+RTX 4090 chip with **128 SMs**[>13]. The distributor's task is to keep all 128
+saturated with work.
 
-[>12]: NVIDIA's AD102-300-A1 SKU disables 16 of the physical 144 SMs on the full
+[>13]: NVIDIA's AD102-300-A1 SKU disables 16 of the physical 144 SMs on the full
 die to maximize manufacturing yield, as detailed in the [NVIDIA Ada GPU Architecture whitepaper](https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf).
 
-To understand how a single flat SASS binary in VRAM becomes a massively
-parallel program, we have to look at how the SIMT execution model is
-decentralized. The compiled machine code sits as a single linear sequence in
-global memory, but there is no central master unit broadcasting instructions to
-the SMs. Instead, each SM contains its own local Instruction Cache (I-cache),
-and every active warp on the GPU maintains its own private Program Counter
-(PC). Schedulers on the SM fetch instructions independently, allowing different
-warps to execute the same SASS code at completely different speeds, or even
-down different branch paths.
+The compiled machine code sits as a single linear sequence in global memory.
+Each SM contains its own local Instruction Cache (I-cache), and every active
+warp on the GPU maintains its own private [Program
+Counter](https://en.wikipedia.org/wiki/Program_counter) (PC)[>14]. Schedulers on the
+SM then fetch instructions from that linear sequence independently, allowing
+different warps to execute the same SASS code at different speeds, or down
+different branch paths.
+
+[>14]: Since Volta, the model goes finer still — each *thread* carries its own
+program counter and call stack ([Independent Thread
+Scheduling](https://docs.nvidia.com/cuda/volta-tuning-guide/index.html#independent-thread-scheduling)),
+letting threads in a warp diverge and reconverge freely. Issue is still
+per-warp, though: each cycle the scheduler picks one warp and issues to the
+lanes currently at a common PC.
 
 [>_2]
 
@@ -687,11 +656,12 @@ down different branch paths.
 [>_2]: One instruction stream in VRAM, cached locally per SM. An SM keeps up to
 48 warps resident (the grid), but its four schedulers issue at most one
 instruction each per cycle. Here nearly every warp is parked on the `LDG.E` load
-(orange) and only one slot is issuing the `FADD` (green): packed with warps, yet
-barely issuing, because the wall is memory. Nothing crosses a bus — stream and
-SMs are all on the GPU.
+(orange) and only one slot is issuing the `FADD` (green).
 
-How many blocks can run at the same time? The hardware constraints of our SMs:
+The hardware constraints of our SMs set the number of blocks that can run at
+the same time[>15]:
+
+[>15]: `cudaGetDeviceProperties` tells you this information
 
 ```txt
   +------------------------------------------------------------+
@@ -703,17 +673,20 @@ How many blocks can run at the same time? The hardware constraints of our SMs:
   +------------------------------------------------------------+
 ```
 
-Our launch configuration specifies blocks of **256 threads (8 warps)**, and `ptxas` reserved **16 registers per thread**. 
+Our launch configuration specifies blocks of **256 threads (8 warps)**, and
+`ptxas` reserved **16 registers per thread**. 
 
-1. **Register capacity**: Each block needs $256 \times 16 = 4,096$ registers. On registers alone, an SM could fit $65,536 / 4,096 = 16$ resident blocks.
-2. **Thread capacity**: The hardware caps each SM at 1,536 active threads. Divided by our block size, this yields $1,536 / 256 = 6$ resident blocks.
+1. **Register capacity**: Each block needs $256 \times 16 = 4,096$ registers.
+   On registers alone, an SM could fit $65,536 / 4,096 = 16$ resident blocks.
+2. **Thread capacity**: The hardware caps each SM at 1,536 active threads.
+   Divided by our block size, this yields $1,536 / 256 = 6$ resident blocks.
 
-Because thread capacity is the tighter bottleneck, each SM holds at most **6 blocks (48 warps) at once** — the occupancy ceiling for this launch. 
+Because thread capacity is the tighter bottleneck, each SM holds at most **6
+blocks (48 warps) at once**. 
 
 The distributor assigns these 6 resident blocks to an SM. Each SM is divided
 into **four processing blocks (sub-partitions)**. Each sub-partition is a
-self-contained execution pipeline featuring its own dedicated warp scheduler,
-instruction dispatch unit, and register file slice. 
+self-contained execution pipeline.
 
 The SM distributes our 48 resident warps evenly across these four
 sub-partitions, so when the SM is full each warp scheduler has **12 active warps**
@@ -721,21 +694,26 @@ sub-partitions, so when the SM is full each warp scheduler has **12 active warps
 evaluates its 12 candidates, selects one *eligible* warp, and dispatches its
 next instruction across the 32 physical lanes of its execution slice.
 
-What does it mean for a warp to be *eligible*? 
+### What does it mean for a warp to be *eligible*? 
 
-A GPU decides when an instruction is ready to run completely differently from a
-CPU. On a modern Out-of-Order CPU, instruction dependencies are discovered
-dynamically at runtime by complex, power-hungry hardware. A GPU cannot afford
-this complexity. To cram thousands of execution cores onto a single die, the
-hardware pipeline must remain lean and simple. Consequently, dependency
-tracking gets pushed into the compiler as far as possible.
+A GPU decides when an instruction is ready to run differently from a CPU. A
+modern out-of-order CPU discovers dependencies [dynamically at
+runtime](https://en.wikipedia.org/wiki/Tomasulo%27s_algorithm), with [reorder
+buffers](https://en.wikipedia.org/wiki/Re-order_buffer) and [rename
+logic](https://en.wikipedia.org/wiki/Register_renaming) spending silicon on
+extracting parallelism from a single thread. A GPU doesn't need that: it hides
+latency by keeping many warps resident and switching between them when they
+stall. With parallelism the order of the day, too much heavyweight dependency
+machinery is the wrong use of silicon. So the hardware leans on the compiler to
+schedule everything whose timing it can predict, falling back to lightweight
+hardware scoreboards for whatever it can't.
 
 Every 128-bit SASS instruction carries a packed control-code payload written by
-`ptxas`[>13]. These scheduling control bits dictate hardware timing directly and
+`ptxas`[>16]. These scheduling control bits dictate hardware timing directly and
 contain three key directives:
 
 1. **A static stall count**: For fixed-latency instructions—like standard
-   integer or floating-point math—the compiler knows exactly when the ALUs will
+   integer or floating-point maths—the compiler knows exactly when the ALUs will
    write back. It encodes a precise cycle count telling the scheduler exactly
    how long to park this warp before issuing its very next instruction.
 2. **A yield hint**: A single bit telling the scheduler whether this warp
@@ -744,64 +722,77 @@ contain three key directives:
    other active warps on the next clock cycle.
 3. **Dependency-barrier indices**: For variable-latency operations whose
    duration cannot be predicted at compile time—most notably global memory
-   loads (`LDG`) and special function math (`MUFU`)—the hardware provides **six
+   loads (`LDG`) and special functions (`MUFU`)—the hardware provides **six
    physical scoreboard barriers (numbered 0 to 5)** per warp.
 
-When `ptxas` emits a global memory load, it allocates one of these physical
-barriers—say, Barrier 0—and tags the load to "set" (increment) that barrier. It
-then flags the first SASS instruction that actually *consumes* the loaded data
-with a wait-mask on Barrier 0. 
-
-The SM's warp scheduler is completely freed from checking register numbers or
-tracking pipeline stages. Each cycle, it simply inspects a 6-bit register
-representing the warp's barrier status. If Barrier 0 is still set, the warp is
-declared **ineligible** and skipped. The scheduler moves on to evaluate the
-other eleven warps in its sub-partition, keeping the execution pipelines
-saturated with zero hardware-scheduling overhead.
-
-[>13]: The clearest public reconstructions are the Citadel microbenchmarking
+[>16]: The clearest public reconstructions are the Citadel microbenchmarking
 papers ([Jia et al., "Dissecting the NVIDIA Volta GPU Architecture via
-Microbenchmarking"](https://arxiv.org/abs/1804.06826)) and [Scott Gray's
+Microbenchmarking"](https://arxiv.org/abs/1804.06826)) and [these
 `maxas` control-code notes](https://github.com/NervanaSystems/maxas/wiki/Control-Codes)
-for Maxwell.
+for Maxwell. 
 
 <Details summary="Why you won't see these bits in the disassembly">
 
-When you disassemble a binary using NVIDIA's standard `nvdisasm` tool, the raw control codes are hidden by default; the tool strips them away to show you standard, clean SASS mnemonics. However, they are stored directly alongside the instructions. If you inspect the raw binary using `cuobjdump -sass` and look closely at the hexadecimal instruction comments (e.g., `/* 0x... */`), you will see the packed, raw hex words that house these control bits.
+When you disassemble a binary using NVIDIA's standard `nvdisasm` tool, the raw
+control codes are hidden by default; the tool strips them away to show you
+standard, clean SASS mnemonics. However, they are stored directly alongside the
+instructions. If you inspect the raw binary using `cuobjdump -sass` and look
+closely at the hexadecimal instruction comments (e.g., `/* 0x... */`), you will
+see the packed, raw hex words that house these control bits.
 
-What we know about their exact layout comes from the microbenchmarking community's reverse-engineering efforts. Although the bit fields have shifted and evolved between Maxwell, Volta, Ampere, and Ada Lovelace, the core architectural concept remains identical: compile-time static scheduling metadata is packed directly into the instruction stream to keep the SM hardware as simple and power-efficient as possible.
+What we know about their exact layout comes from the microbenchmarking
+community's reverse-engineering efforts. Although the bit fields have shifted
+and evolved between Maxwell, Volta, Ampere, and Ada Lovelace, the core
+architectural concept remains identical: compile-time static scheduling
+metadata is packed directly into the instruction stream to keep the SM hardware
+as simple and power-efficient as possible.
 
 </Details>
 
-You can read this exact hardware story off our own SASS listing from earlier. Let's look at the critical sequence of instructions:
+Running `cuobjdump -sass` on our `vadd`, each instruction comes with its raw
+128-bit encoding as two 64-bit words, and the *second* word of each pair
+carries the control payload:
 
 ```sass
-/*00a0*/  LDG.E R4, [R4.64] ;                         // Load b[i] into R4
-/*00b0*/  LDG.E R3, [R2.64] ;                         // Load a[i] into R3
-/*00c0*/  IMAD.WIDE R6, R6, R7, c[0x0][0x170] ;       // Compute &c[i]
-/*00d0*/  FADD R9, R4, R3 ;                           // Compute a[i] + b[i]
+$ cuobjdump -sass vadd                              # control payload
+/*00a0*/  LDG.E R4, [R4.64]                       /* 0x000ea8000c1e1900 */
+/*00b0*/  LDG.E R3, [R2.64]                       /* 0x000ea2000c1e1900 */
+/*00c0*/  IMAD.WIDE R6, R6, R7, c[0x0][0x170]     /* 0x000fe200078e0207 */
+/*00d0*/  FADD R9, R4, R3                         /* 0x004fca0000000000 */
+/*00e0*/  STG.E [R6.64], R9                       /* 0x000fe2000c101904 */
 ```
 
-At `/*00a0*/` and `/*00b0*/`, the compiler emits two global memory loads
-(`LDG.E`). Because VRAM latency is completely variable and unpredictable at
-compile time, `ptxas` cannot use static stall counts here. Instead, it
-allocates physical scoreboard barriers—say, Barrier 0 for `b[i]` and Barrier 1
-for `a[i]`. It tags the two `LDG.E` instructions to "set" (increment) Barrier 0
-  and Barrier 1 upon completion.
+Pulling out the control payloads[>16] — their bit layout is in the
+[appendix](#decoding-the-sass-control-words) — you can see the schedule that
+`ptxas` wrote, with each directive in action:
 
-The compiler then looks ahead to find the first instruction that actually
-consumes the loaded data. That is the `FADD` instruction at `/*00d0*/`, which
-needs the values in `R4` and `R3`. To prevent the execution unit from consuming
-garbage before the data arrives from memory, the compiler tags `FADD` with a
-wait-mask on both Barrier 0 and Barrier 1.
+| instruction  | stall | yield | sets | waits-on |
+| ------------ | :---: | :---: | :--: | :------: |
+| `LDG.E`      | 4     | yes   | `B2` | —        |
+| `LDG.E`      | 1     | yes   | `B2` | —        |
+| `IMAD.WIDE`  | 1     | yes   | —    | —        |
+| `FADD`       | 5     | no    | —    | `B2`     |
+| `STG.E`      | 1     | yes   | —    | —        |
 
-While the data is in flight from global memory, the warp's barrier registers
-remain set. Each cycle, the warp scheduler looks at the warp's 6-bit barrier
-mask, sees that Barrier 0 and 1 are still active, and declares this warp
-**ineligible**. Instead of stalling the whole processing block, the scheduler
-simply skips this warp and selects a ready instruction from one of the other 11
-active warps in its sub-partition. This is how a GPU achieves zero-overhead,
-hardware-driven latency hiding.
+The two loads leverage directive 3, each "set"-ing the **same** scoreboard
+barrier, `B2`. The `FADD`, the first instruction that needs the loaded `R4` and
+`R3`, carries a wait on `B2`: until both loads have returned and the barrier
+clears, the warp is **ineligible**, and the scheduler skips it for one of the
+other eleven warps in the sub-partition.
+
+The `FADD`→`STG` hand-off is directive 1. A floating-point add has a fixed
+latency, so there is no barrier: `FADD` just carries `stall=5`, which parks the
+warp for the few cycles it takes for `R9` to land before `STG` reads it. 
+
+The yield bit, directive 2, toggles on & off  across the sequence, as the
+compiler nudges scheduling priority around the operations that are about to
+wait.
+
+Each cycle the scheduler reads the warp's six-bit barrier state and a small
+stall counter, and makes the eligibility decision for each warp. This is how a
+GPU hides latency with close to zero hardware-scheduling overhead.
+
+### Loading the data
 
 When a warp scheduler does find an eligible warp and issues the `LDG.E` loads,
 we can follow the hardware requests down the memory hierarchy. Each of the 32
@@ -810,25 +801,23 @@ elements of `float` arrays (each 4 bytes), the warp requests a contiguous block
 of 128 bytes ($32 \times 4$ bytes). 
 
 The SM's load/store unit detects this consecutive access pattern and performs
-**request coalescing**. It merges the 32 individual thread requests into
-exactly four 32-byte sector requests—the optimal, fully coalesced best-case
-transaction with zero memory waste. 
+**request coalescing**. It merges the 32 per-thread 4-byte requests into four
+32-byte sector requests. Fetches are in units of 32 bytes, so this is perfect
+-- if the reads were not consecutive & coalesced like this we'd end up loading
+more data than we needed.
 
 The coalesced requests first check the SM's local L1 Data Cache. If they miss,
 they are routed through a high-bandwidth crossbar interconnect that links all
 128 SMs to the distributed slices of the 72 MB L2 Cache. If the requests miss
 in the L2 cache as well, they descend further to the memory controllers and
-travel across the ultra-wide 384-bit memory bus to the physical GDDR6X VRAM
-chips[>14]. The `STG.E` store that writes `c[i]` at the end of the loop follows
-the exact same path in reverse. None of this complex routing is visible in the
-instruction stream; the SASS simply executes `LDG.E` and `STG.E`, leaving the
-hardware memory subsystem to orchestrate the rest.
+travel across the memory bus to the physical GDDR6X VRAM chips[>17]. The
+`STG.E` store that writes `c[i]` at the end of the loop follows the exact
+same path in reverse[>18].
 
-[>14]: The RTX 4090 uses GDDR6X memory rather than the High-Bandwidth Memory
-(HBM) found in datacenter-class GPUs like the A100 or H100. While the physical
-memory interface is different, the hierarchy of the descent—from register files
-to coalescing units, L1 caches, crossbars, L2 cache slices, and memory
-controllers—is conceptually identical.
+[>18]: In principle anyway, we'll see later that `c[i]` never hits VRAM.
+
+[>17]: The RTX 4090 uses GDDR6X memory rather than the High-Bandwidth Memory
+(HBM) found in datacenter-class GPUs like the A100 or H100. 
 
 If we run our compiled kernel under the NVIDIA Nsight Compute profiler (`ncu`),
 we can get some telling metrics:
@@ -858,21 +847,48 @@ gpu__time_duration.sum                        us     10.78
 82.77% of warps were active over the run. The warps were issuing instructions
 5.17% of the time. The DRAM was running at 79.65% of its maximum utilization.
 
-The reason: the kernel has an extremely low **arithmetic intensity**: it
+The kernel has an extremely low **arithmetic intensity**: it
 performs exactly one floating-point addition (`FADD`) and a tiny amount of
 pointer arithmetic for every 12 bytes of data it transfers (two 4-byte loads
 and one 4-byte store). 
 
-So the `10.78` $\mu$s comes down to one thing: how fast the GDDR6X bus can feed
-the kernel its inputs, here about four-fifths of peak[>15].
+So the `10.78` $\mu$s just comes down to how fast the DRAM bus can feed the
+kernel its inputs, here about four-fifths of peak[>19].
 
-[>15]: Only the two inputs cross the bus, not the full 12 MB. `ncu` shows
+[>19]: Only the two inputs cross the bus, not the full 12 MB. `ncu` shows
 8.4 MB read from DRAM and essentially nothing written: the 4 MB output `c` fits
 in the 72 MB L2 and isn't flushed to DRAM until the later device-to-host copy
 reads it back. The four-fifths-of-peak figure is the read side —
 8.4 MB / 10.78 $\mu$s $\approx$ 780 GB/s.
 
-## Back up the stack to the answer
+## Back to the CPU
+
+The result is now sitting in the GPU's L2 cache. The CPU is what runs our
+terminal, so it needs to get the result in order to show it to us. We return to
+its view of events.
+
+The launch returned control to the CPU the moment the doorbell rang. So the GPU
+needs to tell the CPU it's done. When the last of our 4096 blocks retires, the
+GPU does so by posting a completion semaphore the QMD carried (the [fence
+fields](#reading-device-memory--qmd-layout) at words 23–24). 
+
+The device-to-host `cudaMemcpy(c, dc, …)`[>20] copy sits behind the kernel on
+the default stream, so the GPU's copy engine (which performs the transfer) is
+gated on the semaphore. Once the value appears the GPU performs the DMA.
+Because `c` is still sitting dirty in the 72 MB L2 — the `STG.E` stores never
+had to spill it to DRAM — the engine's reads are served straight from L2, and
+the data crosses PCIe without a DRAM round trip.
+
+[>20]: A pinned-memory `cudaMemcpyAsync` would skip the wait and let the host
+run ahead.
+
+
+Once the copy finishes, it posts its _own_ semaphore, which the host was
+waiting on in `cudaMemcpy`. `cudaMemcpy` completes on the host, `c` is ordinary
+host memory again, and `printf` loads `c[0]` and `c[n-1]` out of RAM, formats
+them into a string, and hands them to a `write` syscall on stdout. 
+
+## The whole path
 
 The kernel source went through `cicc` to PTX and through `ptxas` to SASS, which
 `fatbinary` packed with a fallback copy of the PTX into a cubin-bearing fatbin
@@ -885,10 +901,10 @@ which point the GPU's host engine fetched the work and handed the QMD to the
 compute work distributor. The distributor spread 4096 blocks across 128 SMs at
 full occupancy, four warp schedulers per SM issued 128-bit instructions whose
 stall counts the compiler had written, and a coalesced memory path pulled the
-inputs through GDDR6X at four-fifths of peak bandwidth to compute, in each of a
-million lanes, a single sum. And then, back on the CPU,
-the blocking device-to-host `cudaMemcpy` returned and `printf` told us the
-answer we were waiting for:
+inputs through DRAM at four-fifths of peak bandwidth to compute, in each of a
+million lanes, a single sum. A completion semaphore and a copy engine then
+carried that result back across the bus to where `printf` was waiting, and we
+learnt that:
 
 ```txt
 c[0]=2.000000 c[n-1]=2.000000
@@ -896,21 +912,20 @@ c[0]=2.000000 c[n-1]=2.000000
 
 ## Appendix: how to look inside the launch
 
-We (& claude) use a lot of different tricks to see the different parts of the
-kernel launch happen here. Some of them just come from painstakingly reading
-the [open kernel modules](https://github.com/nvidia/open-gpu-kernel-modules).
+Claude & I used a lot of different tricks to see the different parts of the
+kernel launch happen here. Some of it comes from painstakingly reading the
+[open kernel modules](https://github.com/nvidia/open-gpu-kernel-modules).
 
 A few claims in this post can't be read off the open source, because `libcuda`
-is closed. To figure them out, there are a few useful diagnostic hooks. 
+is closed source. To figure them out, there are a few useful diagnostic hooks. 
 
 ### An interposition hook
 
 Driver method writes never go through a syscall (the driver writes them
-straight into a write-combined buffer it has already mapped) so you can't find
-them with a simple `strace`. The only way to read it is to read the memory. I
-used an `LD_PRELOAD` shim that wraps `mmap`, records every region the driver
-maps from the `/dev/nvidia*` file, and exposes a function a test program
-calls just after the launch returns to dump them:
+straight into a write-combined buffer it has already mapped), so to find them
+you need to read the memory. We used an `LD_PRELOAD` shim that wraps `mmap`,
+records every region the driver maps from the `/dev/nvidia*` file, and exposes
+a function a test program calls just after the launch returns to dump them:
 
 ```c
 #define _GNU_SOURCE
@@ -1035,11 +1050,9 @@ headers:
 - `0x02b4` — `SEND_PCAS_A`, the out-of-line path, which carries only a pointer
   to a QMD that lives elsewhere in VRAM.
 
-The point of the dump is to figure out which one is getting put into the
-pushbuffer.
-
-The dump shows the inline path: one increasing-method burst, count 66, opening
-at `SET_INLINE_QMD_ADDRESS_A`. The 66 words are the two address words
+From the dump, we can figure out which one ends up in the pushbuffer. The dump
+shows the inline path: one increasing-method burst, count 66, opening at
+`SET_INLINE_QMD_ADDRESS_A`. The 66 words are the two address words
 (`SET_INLINE_QMD_ADDRESS_A`/`_B`, `0x0318`/`0x031c`) followed by 64
 `LOAD_INLINE_QMD_DATA` words (`0x0320` onward) — a 256-byte QMD carried inline.
 Within it, word 12 is `0x1000` and word 18 is `0x100`: the 4096 and 256 of
@@ -1099,7 +1112,7 @@ The command stream needs to be read from the memory, but `libcuda` sets up its
 memory and GPU objects the ordinary way: by running `ioctl` (see Michael
 Kerrisk, [*The Linux Programming Interface*](https://www.amazon.com/Linux-Programming-Interface-System-Handbook/dp/1593272200),
 Chapter 4 & 15) on the driver's device files. `strace` on the
-one-kernel program records 948 of them[>16], almost all on two file descriptors
+one-kernel program records 948 of them[>21], almost all on two file descriptors
 — `/dev/nvidiactl` and `/dev/nvidia-uvm`:
 
 ```txt
@@ -1111,15 +1124,55 @@ ioctl(9, ...)                                                  # /dev/nvidia-uvm
 ...
 ```
 
-[>16]: Almost all are one-time setup; a steady launch loop makes far fewer.
+[>21]: Almost all are one-time setup; a steady launch loop makes far fewer.
 
-The magic byte `0x46` is `'F'`, the NVIDIA resource manager's ioctl magic[>17].
+The magic byte `0x46` is `'F'`, the NVIDIA resource manager's ioctl magic[>22].
 The command numbers decode against the open kernel modules'
 [`nv_escape.h`](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/590.48.01/src/nvidia/arch/nvalloc/unix/include/nv_escape.h#L27-L31):
-`0x2A` is `NV_ESC_RM_CONTROL` and `0x2B` is `NV_ESC_RM_ALLOC`. Nearly everything
-the driver does to the kernel module is one of these two — allocate an object,
-or call a control method on one.
+`0x2A` is `NV_ESC_RM_CONTROL` and `0x2B` is `NV_ESC_RM_ALLOC`. 
 
-[>17]: The 'magic' byte is a value every NVIDIA ioctl carries as a sanity check;
+[>22]: The 'magic' byte is a value every NVIDIA ioctl carries as a sanity check;
 see [the Linux kernel
 documentation](https://kernel.org/doc/html/v5.4/process/magic-number.html).
+
+### Decoding the SASS control words
+
+The stall counts, barriers and yield bits from [the eligibility
+section](#what-does-it-mean-for-a-warp-to-be-eligible) come from a 21-bit control
+field `ptxas` packs into the top of each instruction's second 64-bit word, which
+`cuobjdump -sass` prints next to the mnemonic:
+
+```txt
+ 20    17 16       11 10   8 7    5 4 3    0
+┌────────┬───────────┬──────┬──────┬─┬──────┐
+│ reuse  │ wait mask │ read │write │Y│stall │
+│  (4)   │    (6)    │ barr │ barr │ │ (4)  │
+└────────┴───────────┴──────┴──────┴─┴──────┘
+```
+
+The two 3-bit indices name the scoreboard barriers the instruction sets, the
+6-bit mask is the barriers it waits on, `Y` is the yield bit, and `stall` is
+the static cycle count. The layout is undocumented and reconstructed from
+microbenchmarking[>16].
+
+### NVCC host registration callbacks
+
+If you want to see the exact code the compiler generates to register your GPU code at startup, compiling with `nvcc --keep` lets you inspect `vadd.cudafe1.stub.c`. 
+
+The start-of-process registration is handled by an automatically generated constructor:
+
+```c
+// from vadd.cudafe1.stub.c
+static void __sti____cudaRegisterAll(void) __attribute__((__constructor__));
+
+static void __nv_cudaEntityRegisterCallback(void **__T4) {
+    __cudaRegisterEntry(__T4, (void(*)(const float*, const float*, float*, int))vadd,
+                        _Z4vaddPKfS0_Pfi, -1);
+}
+
+static void __sti____cudaRegisterAll(void) {
+    __cudaRegisterBinary(__nv_cudaEntityRegisterCallback);
+}
+```
+
+The `__attribute__((__constructor__))` directive tells the linker to execute `__sti____cudaRegisterAll` before `main` starts. It registers our device binary with the CUDA runtime and schedules the callback. When executed, `__cudaRegisterEntry` maps the host function pointer `vadd` to the mangled device entry point `_Z4vaddPKfS0_Pfi`, building the hash table that `cudaLaunchKernel` queries at launch time.

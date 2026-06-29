@@ -57,7 +57,7 @@ export default defineConfig({
   },
   markdown: {
     shikiConfig: {
-      langAlias: { cuda: 'cpp' },
+      langAlias: { cuda: 'cpp', ptx: 'asm' },
     },
     remarkPlugins: [remarkSidenotes, remarkReadingTime, remarkModifiedTime, remarkMath],
     rehypePlugins: [
