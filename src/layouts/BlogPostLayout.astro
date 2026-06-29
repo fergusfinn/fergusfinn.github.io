@@ -15,6 +15,7 @@ type Props = CollectionEntry<'blog'>['data'] & {
 	remarkPluginFrontmatter: Record<string, string>
 	showConfigSidebar?: boolean
 	stickyToc?: boolean
+	doublewordUrl?: string
 }
 
 const {
@@ -29,6 +30,7 @@ const {
 	coverCredit,
 	showConfigSidebar = false,
 	stickyToc = false,
+	doublewordUrl,
 } = Astro.props
 
 import BaseLayout from './BaseLayout.astro'
@@ -152,6 +154,46 @@ function renderCredit(md?: string) {
 							Last modified: {lastModified}
 						</p>
 					</div>
+
+					<!-- Doubleword note (mirrored / work-related posts) -->
+					{
+						doublewordUrl && (
+							<aside class="mt-12 pt-6 border-t border-black/10 dark:border-white/10 text-base opacity-70 leading-relaxed">
+								<p>
+									I work on this kind of thing at{' '}
+									<a
+										href="https://app.doubleword.ai"
+										target="_blank"
+										rel="noopener noreferrer"
+										class="underline underline-offset-2 hover:opacity-100"
+									>
+										Doubleword
+									</a>
+									, where we're trying to make inference radically more
+									efficient — cheap tokens at scale for agents, batch, and
+									embeddings. If that's useful to you, or you'd like to help
+									build it,{' '}
+									<a
+										href="mailto:careers@doubleword.ai"
+										class="underline underline-offset-2 hover:opacity-100"
+									>
+										we're hiring
+									</a>
+									.
+								</p>
+								<p class="mt-3">
+									<a
+										href={doublewordUrl}
+										target="_blank"
+										rel="noopener noreferrer"
+										class="underline underline-offset-2 hover:opacity-100"
+									>
+										View this post on the Doubleword blog →
+									</a>
+								</p>
+							</aside>
+						)
+					}
 				</div>
 
 				<!-- Right: Space for sidenotes -->

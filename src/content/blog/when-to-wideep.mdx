@@ -1,0 +1,145 @@
+---
+title: 'When to wideEP'
+description: When wideEP makes sense
+pubDate: 'Jun 29 2026'
+index: true
+draft: true
+stickyToc: true
+---
+
+Wide Expert Parallelism or 'wideEP' describes a common deployment pattern for
+expert parallel models. The idea is roughly that we can go much wider with
+expert parallelism than other parallelism strategies (tensor parallel), because
+of EP's specific comms structure. This means we can continue with 'intra-model'
+parallelism far beyond where it would be useful normally. Specifically, we can
+go beyond a single 'scale-up' domain before we have to switch to Data
+Parallelism over many replicas.
+
+In this post, we go over some of the mathematics for when this paradigm
+applies. We'll look at different model architectures, where wideEP benefits
+over just increasing data parallelism, and how the ratio of scale up and scale
+out bandwidth changes the game.
+
+## Setup
+
+Assume we have multiple nodes, each with a certain number of GPUs (usually 8,
+but 4 on [isambard](previous post?)). The GPUs within each node are connected
+with high bandwidth, all-to-all interconnect (note: topology is specific to
+NVIDIA, but changing with other accelerators). We call the networking stack
+inside a single node the 'scale-up' domain.
+
+Each node is then connected to one another via 'scale-out' networking (this
+ends at the datacenter, after which we end up in the public internet or private
+backbones. We don't consider anything past scale-out). Scale out topology is
+much more limited than scale-up topology. Specifically, we usually have 1 NIC
+per GPU, NICs on each node are usually connected in 'rails', and the bandwidth
+from 1 GPU to its corresponding GPU on another GPU is an order of magnitude
+lower than the scale-up domain bandwidth (apart from anything else, it has to
+be, since the NIC is addressed over PCIe. There have been rumours of NVIDIA
+moving the NVLink C2C for the connections between their GPUs and NICs as they
+move beyond PCIe v7 bandwidths though).
+
+Let the intranode bandwidth be $BW_\mathrm{intra}$, and the internode be
+$BW_\mathrm{inter}$.
+
+Our goal is to do expert parallel inference. Assume a layer with $E$ experts
+(to anchor, imagine $256$, as for DeepSeek-v4-flash (LINK) ). Per-token passed
+into the MoE layer, $k$ of those experts are activated ($2$, for deepseek
+flash). 
+
+Let there be $W$ total accelerators, $M$ per GPU, $N$ nodes, $W=M \times N$.
+A sequence has length $T_i$ (in
+principle also some 'prompt' $S_i$ that's already been prefilled, but this is
+not important for the FFNs). Each rank (or TP group) has individual batch size
+$B_i$, and the global batch size $B=\sum_i B_i$.
+
+In expert parallelism, the experts are split across all $W$ accelerators. The
+rest of the model might be performed in 'data parallel' attention, in which
+case each rank performs attention on a batch it owns specifically, with
+attention weights replicated across each rank (common for MLA models). Or ranks
+might be formed into 'tensor parallel' groups, of size at most equal to the
+scale-up domain, where the weights are sharded across each accelerator in the
+group, and each TP rank has a copy of the activations. The difference between
+the two affects: 
+1. the source ranks of the tokens.
+2. to which ranks the results of the expert parallel layers must be communicated back to. 
+
+At each layer, the activations (with hidden dimension $H$) must be communicated
+to their experts, the expert matmul must be performed, and the result must be
+communicated back to the dispatching rank. 
+
+## How much communication do we have to do?
+
+Per rank, we have $ M-1 $ scale up peers, $ W-M $ scale out peers. In a
+rail-optimised fabric GPU $g$ on a node talks to GPU $g$ on every other node
+through rail switch $g$; to reach a GPU $g' \neq g$ off-node you take one extra
+intra-node hop, either out on your own rail and across NVLink on the far side,
+or across NVLink locally and then out on rail $g'$. 
+
+The volume each rank dispatches is set by its own batch, not by how wide we
+go. A rank pushes its $B_i$ tokens, $k$ experts apiece, and with experts spread
+evenly across $W$ accelerators a fraction $M/W = 1/N$ of those destinations sit
+on the local node while $1 - 1/N$ are off it. Counting both the dispatch and the
+combine, the bytes a rank moves over scale-out per layer is:
+
+$$
+V_\mathrm{inter} \;\approx\; 2\,B_i\,k\,H\,b_a\,\Big(1-\tfrac{1}{N}\Big),
+\qquad
+t_\mathrm{inter} \;\approx\; \frac{2\,B_i\,k\,H\,b_a\,(1-1/N)}{BW_\mathrm{inter}},
+$$
+
+where $b_a$ is the bytes per activation element and the factor of two is the
+round trip. The argument for wideEP is basically $(1 - 1/N)$ term. 
+
+The
+per-rank volume depends on the rank's own $B_i k$ and nothing else; widening EP
+does not add traffic, it only shifts the mix from intra-node to inter-node, and
+that mix saturates almost immediately ($1 - 1/N \to 1$ after a couple of nodes).
+This is exactly what tensor parallelism cannot do — there the per-rank
+all-reduce volume grows with the group size, which is why TP is pinned inside a
+single scale-up domain while EP can run across many.
+
+
+The tradeoff that you're trying to win when you do wideEP is: you free up HBM
+by sharding your experts, which means you can keep more sequences in flight.
+For each sequence, you have to pay the scale out comms, but the matmuls once
+you've sent the activations (for the new tokens) can be near free.
+
+Each rank stores $E/W$ experts rather than all $E$, freeing
+roughly $E\,w_E\,(1 - 1/W)$ bytes of weight per layer (with $w_E$ the bytes in
+one expert's weights). That memory becomes KV cache, which becomes a larger
+$B_i$, which becomes throughput — provided we were capacity-bound on batch in
+the first place. WideEP is a way of spending scale-out bandwidth to buy back
+HBM.
+
+What we spend is the all-to-all latency, and whether that costs us anything
+depends on whether it hides behind the expert GEMM[>2]. While it does, a given
+width is free: we keep banking KV cache at no exposed latency. The condition is
+a race between the per-rank weight load and the exposed comms,
+
+$$
+\underbrace{\frac{(E/W)\,w_E}{BW_\mathrm{HBM}}}_{\text{weight load},\ \sim 1/W}
+\;\gtrsim\;
+\underbrace{\frac{2\,B_i\,k\,H\,b_a\,(1-1/N)}{BW_\mathrm{inter}}}_{\text{exposed all-to-all}},
+$$
+
+with $BW_\mathrm{HBM}$ the per-accelerator HBM bandwidth. The left side shrinks
+as we widen; the right side is flat. They cross at
+
+$$
+W_\mathrm{max} \;\approx\;
+\frac{E\,w_E}{BW_\mathrm{HBM}} \cdot
+\frac{BW_\mathrm{inter}}{2\,B_i\,k\,H\,b_a\,(1-1/N)}.
+$$
+
+Below $W_\mathrm{max}$ we widen: the all-to-all hides behind the GEMM and every
+extra rank frees more memory. Above it the step has gone comms-bound, more width
+buys nothing, and the right move is to stop widening and add data-parallel
+replicas instead. The ratio $BW_\mathrm{inter}/BW_\mathrm{HBM}$ sitting in
+$W_\mathrm{max}$ is the knob the hardware hands us: as scale-out bandwidth climbs
+toward HBM bandwidth, the useful EP width climbs with it.
+
+[>2]: This is the overlap that dual-batch / two-batch-overlap schemes are
+chasing — run one microbatch's expert compute while the other's dispatch is in
+flight, so the comms term in the inequality is genuinely hidden rather than
+merely small.

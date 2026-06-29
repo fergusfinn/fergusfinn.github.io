@@ -12,6 +12,9 @@ const blog = defineCollection({
     showConfigSidebar: z.boolean().optional(),
     stickyToc: z.boolean().optional(),
     coverCredit: z.string().optional(),
+    // URL of the post's mirror on the Doubleword blog. When set, the post
+    // shows a muted footer note linking to the mirror and to Doubleword.
+    doublewordUrl: z.string().url().optional(),
   }),
 })
 
