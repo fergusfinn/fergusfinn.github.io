@@ -118,52 +118,8 @@ export default function WidthVsDepth() {
           },
         },
       },
-      plugins: [
-        {
-          // The two gaps at N=8: batch->CC is popularity skew, batch->run is the
-          // locality claim. Drawn as a bracket so the reader sees the claim is the
-          // run-vs-batch distance, not run-vs-CC.
-          id: 'gaps',
-          afterDatasetsDraw(chart) {
-            const { ctx, scales } = chart
-            const xv = 8
-            const x = scales.x.getPixelForValue(xv)
-            const yRun = scales.y.getPixelForValue(35.42)
-            const yBatch = scales.y.getPixelForValue(50.08)
-            const yCC = scales.y.getPixelForValue(56.72)
-            ctx.save()
-            ctx.font = `11px ${theme.fontFamily}`
-            ctx.textAlign = 'left'
-            // locality bracket (batch -> run)
-            ctx.strokeStyle = theme.foreground
-            ctx.lineWidth = 1
-            ctx.beginPath()
-            ctx.moveTo(x, yBatch)
-            ctx.lineTo(x, yRun)
-            ctx.moveTo(x - 3, yBatch)
-            ctx.lineTo(x + 3, yBatch)
-            ctx.moveTo(x - 3, yRun)
-            ctx.lineTo(x + 3, yRun)
-            ctx.stroke()
-            ctx.fillStyle = theme.foreground
-            ctx.fillText('locality', x + 7, (yBatch + yRun) / 2 - 4)
-            ctx.fillStyle = theme.mutedForeground
-            ctx.fillText('30% fewer', x + 7, (yBatch + yRun) / 2 + 10)
-            // popularity gap (CC -> batch)
-            ctx.strokeStyle = theme.mutedForeground
-            ctx.setLineDash([2, 2])
-            ctx.beginPath()
-            ctx.moveTo(x, yCC)
-            ctx.lineTo(x, yBatch)
-            ctx.stroke()
-            ctx.setLineDash([])
-            ctx.fillStyle = theme.mutedForeground
-            ctx.fillText('popularity', x + 7, (yCC + yBatch) / 2 + 3)
-            ctx.restore()
-          },
-        },
-      ],
     })
+
 
     return () => {
       chartInstance.current?.destroy()

@@ -1,60 +1,116 @@
 ---
-title: 'Ragged speculation: per-sequence draft lengths'
+title: 'Trading width for depth in speculative decoding'
 description: |
-  A follow-on to adaptive speculative decoding. The priced policy picks one
-  draft depth for the whole batch, but committed tokens are all-or-nothing and
-  the drafter already knows which rounds are which. Gating draft depth per
-  sequence on the drafter's own confidence -- and using the same knob for QoS
-  within a batch.
+  Two stories hiding in the speculation data from the last post: how batching
+  (width) trades against speculation (depth) once MoE routing isn't uniform, and
+  why speculating a different depth per request beats one depth for the batch.
 pubDate: 'Jun 23 2026'
 stickyToc: true
 index: false
 draft: true
 ---
 
+import WidthVsDepth from '../../components/specdec/WidthVsDepth.tsx'
+import ExpertPopularity from '../../components/specdec/ExpertPopularity.tsx'
 import AcceptLengthHist from '../../components/specdec/AcceptLengthHist.tsx'
 import AcceptJointHeatmap from '../../components/specdec/AcceptJointHeatmap.tsx'
 import GatingLadder from '../../components/specdec/GatingLadder.tsx'
 
-{/*
-STATUS: Stub. Branched out of trading-width-for-depth (the routing-locality
-measurement post) -- this is the policy half. Sequel to adaptive-speculation
-(Post 2): that post priced one homogeneous gamma for the WHOLE batch; this one
-goes ragged, per-sequence, gating on drafter confidence.
+Building the [last post](https://fergusfinn.com/blog/adaptive-speculation/) meant
+collecting a fair amount of data about how our two draft models behave: half a
+million draft rounds each, every round recording the drafter's own per-depth
+confidence and the number of tokens the target actually committed (published as
+[`qwen3.6-specdec-calibration`](https://huggingface.co/datasets/Doubleword/qwen3.6-specdec-calibration)).
+Alongside it, we logged which experts every token routed through.
 
-TWO IDEAS:
-  1. Confidence gating (efficiency). Acceptance is all-or-nothing; the drafter's
-     per-depth logprob is calibrated about which kind of round it is; allocate
-     gamma_i per sequence to maximise AGGREGATE goodput. Sim shows ~10-30%
-     throughput win at various operating points. Figures: AcceptLengthHist,
-     AcceptJointHeatmap, GatingLadder. Math written.
-  2. QoS via ragged depth (fairness) -- TODO, mostly unwritten. SAME mechanism
-     (per-sequence gamma), DIFFERENT objective: hit per-request latency targets,
-     not aggregate goodput. The two rules are in TENSION -- gating says draft
-     deep where it'll be ACCEPTED; QoS says draft deep where the user is PAYING
-     for low latency, regardless of acceptance. That tension is the spine of the
-     section, and arguably the most original idea in the pile.
+Here are a couple of stories from that data. First, from the routing: how width
+(batching) and depth (speculation) trade off against one another, and when each
+wins. Then, from the acceptance side: why speculating a different amount for each
+request beats picking one depth for the whole batch.
 
-HINGE FROM POST A: trading-width-for-depth ends on the null result (target expert
-routing does NOT predict acceptance, entropy AUC 0.50 vs draft_logprob 0.78). That
-null is this post's premise: the signal isn't in which experts fire, it's in the
-logprob -- so gate on the logprob.
+Let's take the depth axis first. Here's a fun interview question. Imagine you're
+running Qwen3.6-35B-A3B at batch size $1$, on a single GPU, and you decide you
+want to increase throughput. For whatever reason, your engine can only work on
+$2$ tokens at a time. You have two choices[>1]:
 
-ENGINE REQ for both halves: efficient ragged speculation -- different verify
-widths per sequence in one batch (CUDA graphs per shape; rewinding linear-attention
-state on mis-speculation).
+[>1]: Assume you don't have to prefill anything to batch, and that the
+sequences are short enough that the KV cache movement doesn't come into play.
 
-Campaign: ~/notes/docs/campaigns/adaptive-speculation/. Gating ladder + accept data
-from the same banks as Post 2 (Doubleword/qwen3.6-specdec-calibration).
-*/}
+1. Run at batch size $2$ by batching $2$ random user sequences together.
+2. Running at batch size $1$, speculate out to draft length $2$, with a
+   per-token acceptance rate $\alpha$.
 
-Last [time](https://fergusfinn.com/blog/adaptive-speculation/) we built a priced
-policy that chooses a draft length $\gamma$ at runtime. But it answers the same
-for the whole batch: under the global average acceptance curve, what single draft
-depth maximises goodput. That leaves something on the table, because the batch is
-not homogeneous.
+Which is better, assuming you only care about the number of tokens being output
+per second (not TPOT, i.e. you don't care about tokens per user per second)? In
+a perfectly implemented inference engine, which gives you the maximum output
+throughput?
 
-## Gating draft depth on confidence
+Here's a sensible answer.
+
+> Assuming that everything is memory bound, batching is always better for
+> $\alpha<1$, because there's no chance that a token added to the working set
+> by increasing the batch size will be rejected. You'd only choose speculative
+> decoding in this case if you wanted to improve the TPOT for your user at the
+> expense of some global throughput. At $\alpha=1$, they have the same
+> throughput.
+
+Here's something that's true sometimes:
+
+> Speculating 2 positions out produces, globally, more output tokens per
+> second, than running at a batch size of 2, even with $\alpha=0.9$.
+
+Here's why.
+
+## MoEs are weird
+
+First, let's look at the distribution of routed experts (previously, we've just
+assumed uniform routing, so we get [coupon-collector maths](https://fergusfinn.com/blog/economics-of-speculative-decoding/#the-expert-tax)):
+
+<ExpertPopularity client:load />
+
+Surprisingly non-uniform! The distribution is kinda
+[Zipfian](https://en.wikipedia.org/wiki/Zipf%27s_law) -- a handful of experts
+take many times their share of the tokens, and a long tail barely fires.
+
+More interesting though: are there patterns in which tokens activate which
+experts? In particular, are tokens next to each other in a sequence ("My",
+"cat") likely to co-activate the same experts more than random
+sequences?
+
+<WidthVsDepth client:load />
+
+The chart counts the distinct experts one verify forward touches as $N$ grows,
+three ways: $N$ separate sequences (width), one sequence speculating $N$ (depth),
+and the uniform coupon-collector we'd been assuming. The batch sits below
+coupon-collector because of the skew above -- real sequences keep hitting the
+same popular experts -- and the run sits below the batch again, because adjacent
+tokens co-activate.
+
+So it resolves the interview question. At batch size 1 we're memory-bound, and
+verifying two speculated tokens moves less expert weight than adding a second
+sequence would. Even throwing away 10% of speculated tokens at $\alpha = 0.9$,
+depth beats width.
+
+## Confidence gating
+
+Routing wasn't the only thing we'd been treating as uniform. The batch is not
+homogeneous. There are many reasons we should treat each request in the batch
+differently. The most prominent: each decode request is
+not equally easy to speculate from. If we can get some sense of how confident
+the drafter is, we can use that to calibrate how many tokens we should propose
+to the verifier, and save verifier compute.
+
+I wrote the skeleton & did the simulations for this part a week ago. The
+conclusion I came to was that this was a good idea but that I wouldn't want to
+have to implement it. Happily, [DeepSeek](https://arxiv.org/abs/2606.19348)
+came along with DSpark, and did it way better than I likely would have, along
+with some great modelling of how adding causality to [DFlash](https://arxiv.org/abs/2602.06036) style drafters
+increases their ability to produce great drafts. The results show great
+throughput gains, and also that the naive confidence calibration (just reading
+off the logits) that this post argues for leaves performance on the table.
+
+I think the argument and the data is still interesting though, so here's the
+argument in close to its original form:
 
 The number of committed tokens is not clustered around the mean, but more like
 all-or-nothing. On a given round the drafter tends to be right about almost
@@ -63,32 +119,41 @@ shape. Rounds are mostly 'near-misses' or 'clean sweeps':
 
 <AcceptLengthHist client:load />
 
-i.e. both kinds of drafters have a spike at their max committed tokens. (TODO:
-is this spike just the integral of like a fitted curve past the max off to
-infinity?)
+i.e. both kinds of drafters have a spike at their max committed tokens.[>2]
 
-A single depth has to compromise
-between those two populations, deep enough to cash in the easy rounds, shallow
-enough not to verify the hard ones into the ground.
+[>2]: One good question for those training draft models: is this spike at the
+maximum draft length representative of the fact that the model could have gone
+further, but wasn't able to?
 
-Happily, the drafter has an opinion about which kind of round it is before the
-verifier runs. Plot the cumulative product of its per-depth confidences, against
-the length that actually committed. Diagonals are 'perfectly calibrated': i.e.
-the empirical accepted tokens at that length is the same as the confidence
-derived from the drafter logprobs. Below the diagonal, the drafter was
-overconfident, above, not confident enough.
+A single fixed depth has to compromise between those two populations, deep
+enough to cash in the easy rounds, shallow enough not to waste too much time on
+requests that will be almost all rejections.
+
+The drafter already has an opinion about which kind of round it is before the
+verifier runs. Below, we plot the cumulative product of the drafter's per-depth
+confidences, against the length that actually committed. By confidence we mean
+the probability corresponding to the accepted token. Diagonals are 'perfectly
+calibrated': i.e. the empirical accepted tokens at that length is the same as
+the confidence derived from the drafter logprobs. Below the diagonal, the
+drafter was overconfident, above, not confident enough.
 
 <AcceptJointHeatmap client:load />
 
-Write round $i$'s expected committed tokens at depth $\gamma$ from its own per-depth
-confidences $a_k^i$,
+The argument is that there's lots of blue along the diagonal, and that's free
+signal we could be using to improve our drafting policy.
+
+How can we do that?
+
+Write round $i$'s expected committed tokens at depth $\gamma$ from its own
+per-depth confidences $a_k^i$,
 
 $$
 m_i(\gamma) = 1 + \sum_{d=1}^{\gamma} \prod_{k=1}^{d} a_k^i .
 $$
 
 The homogeneous policy constrains the whole batch to one depth and maximises
-once,
+once -- committed tokens over $C(B,\gamma)$, the wall-clock [cost of the
+step](https://fergusfinn.com/blog/adaptive-speculation/):
 
 $$
 \gamma^\star =
@@ -96,9 +161,9 @@ $$
 \frac{\sum_i m_i(\gamma)}{C(B, \gamma\mathbf{1})}.
 $$
 
-Really you can do better though, since the confidences are per sequence in the
-batch. For per-sequence gating, the object is the vector of depths
-$\mathbf{\gamma} = (\gamma_1,\ldots,\gamma_B)$:
+The confidence gating idea is that you can do better, since the confidences are
+per sequence in the batch. For per-sequence gating, the object is the vector of
+depths $\mathbf{\gamma} = (\gamma_1,\ldots,\gamma_B)$:
 
 $$
 \mathbf{\gamma}^\star =
@@ -106,8 +171,10 @@ $$
 \frac{\sum_i m_i(\gamma_i)}{C(B, \mathbf{\gamma})}.
 $$
 
-There's a signal that we could use if we wanted to. Running the simulation
-tells us what that signal could be worth:
+So at each step, we calculate the optimal $\bf{\gamma}$ vector, by
+appropriately discounting future tokens based on how unlikely they are under
+the distribution of the draft model. Running the [simulations](https://github.com/doublewordai/inference-lab) with $\bf{\gamma}$
+picked in this way:
 
 <GatingLadder client:load />
 
@@ -116,39 +183,59 @@ i.e. it only ever drafts things that it knows ahead of time will be accepted.
 
 So there are big gains at small batch size: where the expert coupon-collector
 makes mis-speculation expensive. And then, as parts of the model go past the
-compute bound cliff, there are gains from acceptance gating, since speculation
+[compute bound cliff](https://fergusfinn.com/blog/economics-of-speculative-decoding/#the-expert-tax), there are gains from acceptance gating, since speculation
 now only wins in those parts of the model that are compute bound. The
 batch-averaged signal washes out as the batch size increases -- i.e, you can't
 adaptively choose a global $\gamma$ from the confidences -- because the larger
-batch is more heterogeneous.
+batch is more heterogeneous, so you have to do it ragged.
 
 There's something like a ~10-30% throughput win at various operating points by
 picking $\gamma_i$ dynamically per sequence, based on a cost model and drafter
 confidence -- provided already by existing models. If you want those wins,
-though, your engine needs to be able to efficiently raggedly speculate.
+though, your engine needs to be able to efficiently raggedly speculate. vLLM &
+SGLang can't do this right now (though DSpark has lit a fire under the
+community, since they showed the benefits of it).
 
-## Speculation as a QoS knob
+## Speculation as a Quality-of-Service knob
 
-Everything above spends the per-sequence draft depth to maximise *aggregate*
-goodput: draft deep where the tokens will be accepted, shallow where they won't.
-But the same ragged mechanism answers a different question just as well. Within
-one batch different requests can want different things -- a latency-sensitive
-request wants its tokens as fast as possible, a bulk request is happy to trade
-latency for throughput -- and per-sequence draft depth is a knob on exactly that
-tradeoff. Spending depth to maximise goodput and spending it to hit a latency
-target are not the same allocation, and where they disagree is the interesting
-part.
+Everything above spends the per-sequence draft depth to maximise _aggregate_
+goodput. But one nice thing about being able to raggedly speculate is that it
+opens up many more doors.
 
-{/* TODO: develop the tension. Goodput-gating draws depth toward sequences the
-drafter is confident about; an SLA policy draws it toward sequences that are
-behind their latency budget, even if their acceptance is mediocre. Sketch the
-objective: maximise goodput subject to per-request TPOT constraints, or a
-weighted blend. What does the simulator say it costs to honour the SLA vs the
-pure-goodput frontier? Does the same GatingLadder machinery extend, or does it
-need a per-request budget term in C? */}
+We've discussed optimizing for total goodput here, and its a sensible default.
+But lots of inference providers (most interestingly
+[Doubleword](https://doubleword.ai), obviously, but also [Claude
+fast](https://code.claude.com/docs/en/fast-mode)) offer multiple
+Quality-Of-Service tiers, allowing users to tradeoff time per output token per
+request for a lower price (at large, a proxy for global throughput, since TPOT
+doesn't track linearly with price). Usually you can't maintain very strict TPOT
+guarantees while simultaneously running at large batch size (as you'd like to
+if, for example, you want to co-run batch requests in your fast-mode servers).
+But with better & more precise speculation - you can allocate your speculation
+budget across your global batch size, such that your high QoS requests progress
+faster, and your global throughput ought to be higher than you could maintain
+without co-scheduling.
 
-{/* TODO: appendix pointers -- trace provenance, the faithful (rejected-draft)
+## Conclusion
+
+Speculative decoding really is [all you
+need](https://modal.com/blog/spec-is-all-u-need): there's very little in the
+space of inference optimization that offers close to the throughput gains we
+can get from well tuned speculators.
+
+Modern LLMs at decode time are almost designed to be hard on the hardware --
+MoEs, Attention, Autoregressive sampling, all kill our ability to drive the
+right number of FLOPs through the hardware. The problems not likely to go away
+soon: we're hitting the [memory
+wall](https://newsletter.semianalysis.com/p/the-memory-wall) again (this time,
+at much higher speed), and the logic of training makes it reasonable to design
+our models with headroom to soak up as many FLOPs as possible.
+
+This realisation of the outsized value of speculative decoding is gathering
+pace: so fast that ideas that were live and well a week ago are outdated today.
+
+{/_ TODO: appendix pointers -- trace provenance, the faithful (rejected-draft)
 check. The gating ladder is a closed-loop sweep that takes the priced policy as a
 baseline and adds the confidence signal in steps: one verify width for the whole
 batch, then a width per sequence, then the same allocation handed the true accept
-pattern instead of the confidence (the oracle). */}
+pattern instead of the confidence (the oracle). _/}

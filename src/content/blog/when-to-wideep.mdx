@@ -7,6 +7,8 @@ draft: true
 stickyToc: true
 ---
 
+import WideEPExplorer from '../../components/WideEPExplorer.tsx'
+
 Wide Expert Parallelism or 'wideEP' describes a common deployment pattern for
 expert parallel models. The idea is roughly that we can go much wider with
 expert parallelism than other parallelism strategies (tensor parallel), because
@@ -45,7 +47,7 @@ $BW_\mathrm{inter}$.
 Our goal is to do expert parallel inference. Assume a layer with $E$ experts
 (to anchor, imagine $256$, as for DeepSeek-v4-flash (LINK) ). Per-token passed
 into the MoE layer, $k$ of those experts are activated ($2$, for deepseek
-flash). 
+flash).
 
 Let there be $W$ total accelerators, $M$ per GPU, $N$ nodes, $W=M \times N$.
 A sequence has length $T_i$ (in
@@ -60,13 +62,14 @@ attention weights replicated across each rank (common for MLA models). Or ranks
 might be formed into 'tensor parallel' groups, of size at most equal to the
 scale-up domain, where the weights are sharded across each accelerator in the
 group, and each TP rank has a copy of the activations. The difference between
-the two affects: 
+the two affects:
+
 1. the source ranks of the tokens.
-2. to which ranks the results of the expert parallel layers must be communicated back to. 
+2. to which ranks the results of the expert parallel layers must be communicated back to.
 
 At each layer, the activations (with hidden dimension $H$) must be communicated
 to their experts, the expert matmul must be performed, and the result must be
-communicated back to the dispatching rank. 
+communicated back to the dispatching rank.
 
 ## How much communication do we have to do?
 
@@ -74,70 +77,189 @@ Per rank, we have $ M-1 $ scale up peers, $ W-M $ scale out peers. In a
 rail-optimised fabric GPU $g$ on a node talks to GPU $g$ on every other node
 through rail switch $g$; to reach a GPU $g' \neq g$ off-node you take one extra
 intra-node hop, either out on your own rail and across NVLink on the far side,
-or across NVLink locally and then out on rail $g'$. 
+or across NVLink locally and then out on rail $g'$.
 
-The volume each rank dispatches is set by its own batch, not by how wide we
-go. A rank pushes its $B_i$ tokens, $k$ experts apiece, and with experts spread
-evenly across $W$ accelerators a fraction $M/W = 1/N$ of those destinations sit
-on the local node while $1 - 1/N$ are off it. Counting both the dispatch and the
-combine, the bytes a rank moves over scale-out per layer is:
+When deciding how to scale up a deployment, we always have the simple option:
+just do more copies, with load balancing between them (data parallelism). This
+gives us linear scaling of throughput per GPU.
+
+The quesion we ought to ask ourselves: can we do better? Superlinear implies
+that our method of scaling is doing something other than the same thing $N$
+times. For example, the TTFT of a fixed single prefill scales superlinearly
+with tensor parallelism, since more GPUs are brought to bear on the same
+sequence.
+
+The way to get throughput to scale superlinearly is to increase our per GPU
+batch size. We have massive headroom to do this without becoming compute bound,
+since MoEs are so memory hungry. To increase our per-GPU batch size, we need to
+increase the per GPU KV cache size, since this is usually what binds. To
+increase the KV cache size, we need to share weights between different
+accelerators.
+
+I think this is the right way to think about EP -- as a _weight-replication
+continuum_ -- with DP (all experts present on all GPUs) on one end, and EP
+(each expert present on only one GPU) on the other. At the DP end, we do no
+communications; at the EP end, we do a lot of communications. The choice that
+takes us along the continuum: is it cheaper to keep our experts somewhere else,
+and send our tokens to them experts, than it is to keep them here, but pay a
+tax in KV cache space.
+
+From the perspective of a single $M$-GPU node. Our experts take up $K$GB of KV
+cache space per GPU. Each GPU has some fixed amount of HBM it can use to store
+the weights. Assume DPA - so we have to replicate the full attention weights on
+each rank.
+
+The choice to go expert parallel goes through three phases:
+
+1. First: is it possible to fit the whole model on a single node? If its not,
+   then we're going to have to offload some experts to other nodes to get
+   serving at all, and we're going to start off comms bound by inter node
+   bandwidth.
+2. Second: what's the ratio of our cross-node bandwidth to our internode
+   bandwidth? The optimal number of experts to offload, so we are equally bound
+   by intra and inter-node bandwidth, is given by the ratio of the inter to the
+   intra node bandwidth.
+3. Third: Is it valuable to become comms bound by the cross-node bandwidth in
+   exchange for even more KV cache space?
+
+The answers depend on lots of different parameters: the model, the bandwidths,
+the GPUs HBM sizes, the sequence lengths, the phase (prefill/decode/spec. dec.)
+Some of these parameters change over time (the sequence length, the phase).
+
+We haven't even mentioned overlap. There are a few different approaches, mostly
+classifiable as inter-kernel or intra-kernel overlap. DeepEP & TBO are the
+inter-kernel idea: you split each batch into two microbatches, and then do the
+comms of batch A while youre doing the compute of batch B etc. This halves your
+batch size, so halves the weight amortization in the expert compute. Or you can
+do intrakernel (mKernel, comet, megaMoE, etc.), where the comms and compute
+happen withing the same shared MoE megakernel. The problem then is you have
+to write the whole thing, and can't seperately rely on optimized
+implementations of EP & GEMM kernels.
+
+<WideEPExplorer client:load />
+
+## Appendix: the decode-throughput model
+
+The explorer plots one number — per-GPU decode throughput, tokens/s — as a
+memory-bandwidth roofline. Everything below is what it computes; it's
+deliberately a _ceiling_ (HBM traffic and all-to-all only, no kernel overhead),
+so treat the absolute heights as upper bounds and the _shapes_ as the result.
+
+**Setup.** Let $w = E/E_g$ be the effective EP width — the number of GPUs one
+full expert copy is spread across, $E_g$ experts held per GPU. The weight splits
+in two: a replicated part $W_\mathrm{dense}$ (attention, embeddings, shared
+experts, dense FFN, router, and — for hybrids — the Mamba mixers), present on
+every rank, and the routed experts $W_\mathrm{exp}$, sharded by $w$. So per-GPU
+weight is
 
 $$
-V_\mathrm{inter} \;\approx\; 2\,B_i\,k\,H\,b_a\,\Big(1-\tfrac{1}{N}\Big),
-\qquad
-t_\mathrm{inter} \;\approx\; \frac{2\,B_i\,k\,H\,b_a\,(1-1/N)}{BW_\mathrm{inter}},
+W(w) = W_\mathrm{dense} + \frac{W_\mathrm{exp}}{w}.
 $$
 
-where $b_a$ is the bytes per activation element and the factor of two is the
-round trip. The argument for wideEP is basically $(1 - 1/N)$ term. 
+Both are counted in _bytes at their real serving dtype_ — e.g. DeepSeek-V4's
+experts are FP4 (0.5 B) while its attention is FP8, so $W_\mathrm{dense}$ is a
+mixed-precision sum, not a param count times one dtype.
 
-The
-per-rank volume depends on the rank's own $B_i k$ and nothing else; widening EP
-does not add traffic, it only shifts the mix from intra-node to inter-node, and
-that mix saturates almost immediately ($1 - 1/N \to 1$ after a couple of nodes).
-This is exactly what tensor parallelism cannot do — there the per-rank
-all-reduce volume grows with the group size, which is why TP is pinned inside a
-single scale-up domain while EP can run across many.
-
-
-The tradeoff that you're trying to win when you do wideEP is: you free up HBM
-by sharding your experts, which means you can keep more sequences in flight.
-For each sequence, you have to pay the scale out comms, but the matmuls once
-you've sent the activations (for the new tokens) can be near free.
-
-Each rank stores $E/W$ experts rather than all $E$, freeing
-roughly $E\,w_E\,(1 - 1/W)$ bytes of weight per layer (with $w_E$ the bytes in
-one expert's weights). That memory becomes KV cache, which becomes a larger
-$B_i$, which becomes throughput — provided we were capacity-bound on batch in
-the first place. WideEP is a way of spending scale-out bandwidth to buy back
-HBM.
-
-What we spend is the all-to-all latency, and whether that costs us anything
-depends on whether it hides behind the expert GEMM[>2]. While it does, a given
-width is free: we keep banking KV cache at no exposed latency. The condition is
-a race between the per-rank weight load and the exposed comms,
+**Batch.** Whatever HBM the weights leave goes to KV cache, and each sequence
+costs $T\kappa$ bytes of KV ($\kappa$ = KV bytes/token at the serving cache
+dtype) plus, for a hybrid, a fixed recurrent state $S$:
 
 $$
-\underbrace{\frac{(E/W)\,w_E}{BW_\mathrm{HBM}}}_{\text{weight load},\ \sim 1/W}
-\;\gtrsim\;
-\underbrace{\frac{2\,B_i\,k\,H\,b_a\,(1-1/N)}{BW_\mathrm{inter}}}_{\text{exposed all-to-all}},
+B(w) = \frac{C - W(w)}{T\kappa + S}.
 $$
 
-with $BW_\mathrm{HBM}$ the per-accelerator HBM bandwidth. The left side shrinks
-as we widen; the right side is flat. They cross at
+$C$ is HBM/GPU. Widening $w$ shrinks the weight term and grows $B$ — the entire
+point of wideEP.
+
+**The decode step.** Each step is memory-bound, so its time is the HBM traffic
+over bandwidth, plus the exposed all-to-all:
 
 $$
-W_\mathrm{max} \;\approx\;
-\frac{E\,w_E}{BW_\mathrm{HBM}} \cdot
-\frac{BW_\mathrm{inter}}{2\,B_i\,k\,H\,b_a\,(1-1/N)}.
+t_\mathrm{step} = \underbrace{\frac{W(w) + \overbrace{B\,T\kappa}^{\text{KV read}} + \overbrace{2BS}^{\text{state I/O}}}{BW_\mathrm{HBM}}}_{t_\mathrm{HBM}} + t_\mathrm{comms}.
 $$
 
-Below $W_\mathrm{max}$ we widen: the all-to-all hides behind the GEMM and every
-extra rank frees more memory. Above it the step has gone comms-bound, more width
-buys nothing, and the right move is to stop widening and add data-parallel
-replicas instead. The ratio $BW_\mathrm{inter}/BW_\mathrm{HBM}$ sitting in
-$W_\mathrm{max}$ is the knob the hardware hands us: as scale-out bandwidth climbs
-toward HBM bandwidth, the useful EP width climbs with it.
+Three HBM terms: stream the weights once; attention re-reads the _entire_ KV
+cache every step ($B\,T\kappa$); and a Mamba layer reads and writes its recurrent
+state ($2BS$, zero for pure transformers). This KV-read term is what was missing
+from a naïve "throughput = batch / weight-read" model, and it's what makes
+throughput saturate rather than grow without bound[>1].
+
+[>1]: Without it, $\Phi = B/(W/BW_\mathrm{HBM})$ grows linearly with batch until
+comms; with it, $\Phi$ rises to the $BW_\mathrm{HBM}/(T\kappa)$ plateau. The KV
+read is usually the dominant decode term at long context, so omitting it isn't a
+small error.
+
+**Communication.** Per layer a token sends its activation to $k$ experts and gets
+a result back — $2\,k\,H_\mathrm{disp}\,b_a$ bytes over $L_\mathrm{moe}$ MoE layers
+($H_\mathrm{disp}$ is the dispatched width: the hidden size, or a smaller latent
+for a model that down-projects before dispatch; $b_a$ is bytes per dispatched
+element). Under fill-the-node-first placement a needed expert sits on the same
+GPU with probability $f_\mathrm{local} = \min(1, 1/w)$, elsewhere on the node up
+to $f_\mathrm{on} = \min(1, M/w)$, and off-node with
+$f_\mathrm{off} = \max(0, 1 - M/w)$. The on-node and off-node legs run
+concurrently, so we take the slower:
+
+$$
+t_\mathrm{comms} = B \cdot 2 L_\mathrm{moe} k H_\mathrm{disp} b_a \cdot \max\!\left(\frac{f_\mathrm{on} - f_\mathrm{local}}{BW_\mathrm{intra}},\ \frac{f_\mathrm{off}}{BW_\mathrm{inter}}\right).
+$$
+
+**Throughput, and the ceiling.** Per-GPU decode rate is
+$\Phi(w) = B(w)/t_\mathrm{step}$. As $w \to \infty$ the weight term vanishes and
+the KV read fills HBM, so
+
+$$
+\Phi \to \frac{BW_\mathrm{HBM}}{T\kappa},
+$$
+
+a hard per-GPU ceiling set by KV bandwidth alone — independent of batch, weights,
+and width. Big-$\kappa$ models (MiniMax's 4-KV-head GQA, GLM's MLA at 78 layers)
+hit a low ceiling; small-$\kappa$ models (DeepSeek MLA in FP8) a high one.
+
+**Bandwidths.** Measured on the Isambard 4×GH200 node, per direction (a dispatch
+is directional): $BW_\mathrm{intra} = 450$ GB/s (NVLink-4, 18 links ×
+25 GB/s/dir — the aggregate a balanced all-to-all reaches; the quad is
+switchless, so a _single_ peer gets only 6 links ≈ 150 GB/s, but that doesn't
+bind a balanced all-to-all) and $BW_\mathrm{inter} = 25$ GB/s (one 200 Gb/s
+Slingshot NIC per GPU).
+
+**What's idealised** — uniformly, so the _shape_ survives even where the absolute
+number is optimistic: memory-bound compute (the expert GEMM stays HBM-bound below
+~256 tokens/expert, true in this regime; attention and Mamba decode are
+memory-bound by construction); data-parallel attention; perfect overlap of the
+two comms legs but _no_ compute/comms overlap (so $t_\mathrm{HBM}$ and
+$t_\mathrm{comms}$ add); and mean-field routing — balanced load with no expert
+skew, the one place the switchless quad's per-peer limit would actually bite.
+
+{/* SOURCE DUMP — scratch list, expand into proper citations/sidenotes later */}
+
+**Sources (scratch).**
+
+_Hardware._
+
+- [NVIDIA H200](https://www.nvidia.com/en-us/data-center/h200/): 141 GB HBM3e, 4.8 TB/s.
+- [DGX B200 datasheet](https://resources.nvidia.com/en-us-dgx-systems/dgx-b200-datasheet): B200 192 GB, 8 TB/s, NVLink 5 = 1.8 TB/s/GPU.
+- [Inside Blackwell Ultra](https://developer.nvidia.com/blog/inside-nvidia-blackwell-ultra-the-chip-powering-the-ai-factory-era/): B300/GB300 288 GB, 8 TB/s.
+- [GH200 benchmark guide](https://docs.nvidia.com/gh200-superchip-benchmark-guide.pdf): 96 GB HBM3, peak 4,023 GB/s.
+- [Hopper architecture](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/): NVLink 4 = 900 GB/s/GPU (18 × 25 GB/s/dir).
+- [Grace Hopper data-movement (arXiv 2408.11556)](https://arxiv.org/html/2408.11556v2): quad-GH200 has no NVSwitch — 900 GB/s aggregate/GPU, ~150 GB/s/dir per peer.
+- [Isambard-AI specs](https://docs.isambard.ac.uk/specs/): 4×GH200 node, Slingshot-11, 4 × 200 Gb/s Cassini (one NIC/GPU).
+- [NVIDIA Quantum-X800](https://www.nvidia.com/en-us/networking/products/infiniband/quantum-x800/): InfiniBand 200/400/800 Gb/s generations + 1.6T-class roadmap.
+
+_Model configs (HuggingFace `config.json`)._
+
+- [DeepSeek-V4-Pro](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/config.json): H 7168, 384 experts top-6, moe_int 3072, FP4 experts, MLA+DSA, 61 layers.
+- [DeepSeek-V4-Flash](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/blob/main/config.json): H 4096, 256 experts top-6, moe_int 2048, FP4, 43 layers.
+- [Kimi K2.7-Code](https://huggingface.co/moonshotai/Kimi-K2.7-Code/blob/main/config.json): H 7168, 384 experts top-8, moe_int 2048, INT4 W4A16, MLA, 61 layers.
+- [GLM-5.2](https://huggingface.co/zai-org/GLM-5.2/blob/main/config.json): H 6144, 256 experts top-8, moe_int 2048, BF16, MLA+DSA, 78 layers.
+- [MiniMax-M3](https://huggingface.co/MiniMaxAI/MiniMax-M3/blob/main/config.json): H 6144, 128 experts top-4, moe_int 3072, BF16, GQA (4 KV heads × 128), 60 layers.
+- [Nemotron-3-Ultra-550B](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-Base-BF16/blob/main/config.json) ([LatentMoE](https://research.nvidia.com/labs/nemotron/Nemotron-3-Ultra/)): H 8192, 512 experts top-22, moe_latent 2048, NVFP4, hybrid 108 layers = 48 Mamba-2 / 48 MoE / 12 GQA.
+
+_KV footprint (κ, bytes/token, from the same configs)._ MLA caches a 576-elem latent (kv_lora 512 + rope 64) per token per layer. DeepSeek stores it in FP8 → V4-Pro 576×61 = 35 KB, V4-Flash 576×43 = 25 KB. Kimi/GLM BF16 → 70 KB (×61) / 90 KB (×78). MiniMax GQA (2×4×128 = 1024 elem/layer × 60, BF16) → 123 KB. Nemotron: only 12 of 108 layers are attention (the Mamba-2 layers hold per-sequence state, not per-token) → 512×12×2 = 12 KB.
+
+_Kernels / TBO._
+
+- [DeepGEMM](https://github.com/deepseek-ai/DeepGEMM): grouped GEMM is a persistent-tile kernel — weights re-streamed per output tile, not held stationary across microbatches.
+- [SGLang `two_batch_overlap`](https://github.com/sgl-project/sglang): TBO runs two microbatches as separate executors → expert GEMM fires once per microbatch, so expert weights are read from HBM twice per decode step (no weight sharing across the split).
 
 [>2]: This is the overlap that dual-batch / two-batch-overlap schemes are
 chasing — run one microbatch's expert compute while the other's dispatch is in
