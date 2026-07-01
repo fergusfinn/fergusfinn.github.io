@@ -2,14 +2,13 @@
 title: 'Throughputmaxxing DeepSeek-V4-Flash on a single 4×GH200'
 description: 'Single-node serving throughput for DeepSeek-V4-Flash: baseline, MLA/DP-attention, config squeeze, and MTP1 speculative decoding.'
 pubDate: 'Jul 1 2026'
-draft: true
 ---
 
 > **Draft plan (agreed — not body copy; delete before publish).** The single-node
 > story: pushing DeepSeek-V4-Flash throughput on one 4×GH200 by changing serving
 > config only. Arc: baseline (`vllm serve` defaults) → the MLA/DP-attention shape
 > change (measured, 4,852 → 11,489 output tok/s, 2.37×) → squeezing the remaining
-> single-node knobs → speculative decoding with MTP1, measured on a *real* dataset
+> single-node knobs → speculative decoding with MTP1, measured on a _real_ dataset
 > (not `random`, which carries no acceptance signal). Steps 1–2 are done; the MTP1
 > run is the only experiment still pending. No scale-out in this post.
 

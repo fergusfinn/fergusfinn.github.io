@@ -4,7 +4,7 @@ import { getCollection } from 'astro:content'
 export const getStaticPaths: GetStaticPaths = async () => {
   // Drafts are only built during `astro dev`; production builds exclude them.
   const posts = (await getCollection('blog')).filter(
-    (post) => import.meta.env.DEV || !post.data.draft,
+    (post) => import.meta.env.DEV || (!post.data.draft && !post.slug.startsWith('drafts/')),
   )
   return posts.map((post) => ({
     params: { slug: post.slug },

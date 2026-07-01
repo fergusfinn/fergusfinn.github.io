@@ -7,14 +7,13 @@ description: |
 pubDate: 'Jun 23 2026'
 stickyToc: true
 index: false
-draft: true
 ---
 
-import WidthVsDepth from '../../components/specdec/WidthVsDepth.tsx'
-import ExpertPopularity from '../../components/specdec/ExpertPopularity.tsx'
-import AcceptLengthHist from '../../components/specdec/AcceptLengthHist.tsx'
-import AcceptJointHeatmap from '../../components/specdec/AcceptJointHeatmap.tsx'
-import GatingLadder from '../../components/specdec/GatingLadder.tsx'
+import WidthVsDepth from '@/components/specdec/WidthVsDepth.tsx'
+import ExpertPopularity from '@/components/specdec/ExpertPopularity.tsx'
+import AcceptLengthHist from '@/components/specdec/AcceptLengthHist.tsx'
+import AcceptJointHeatmap from '@/components/specdec/AcceptJointHeatmap.tsx'
+import GatingLadder from '@/components/specdec/GatingLadder.tsx'
 
 Building the [last post](https://fergusfinn.com/blog/adaptive-speculation/) meant
 collecting a fair amount of data about how our two draft models behave: half a
@@ -233,9 +232,3 @@ our models with headroom to soak up as many FLOPs as possible.
 
 This realisation of the outsized value of speculative decoding is gathering
 pace: so fast that ideas that were live and well a week ago are outdated today.
-
-{/_ TODO: appendix pointers -- trace provenance, the faithful (rejected-draft)
-check. The gating ladder is a closed-loop sweep that takes the priced policy as a
-baseline and adds the confidence signal in steps: one verify width for the whole
-batch, then a width per sequence, then the same allocation handed the true accept
-pattern instead of the confidence (the oracle). _/}

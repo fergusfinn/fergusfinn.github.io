@@ -2,7 +2,6 @@
 title: 'Scaling out: when wide expert parallelism pays'
 description: 'When does adding nodes raise per-GPU throughput? The wide-EP scale-out story, on a model still to be chosen.'
 pubDate: 'Jul 1 2026'
-draft: true
 ---
 
 > **Draft plan (agreed — not body copy; delete before publish).** The scale-out

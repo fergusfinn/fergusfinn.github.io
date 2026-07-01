@@ -1,17 +1,22 @@
 ---
-import { getCollection } from 'astro:content'
+import { getCollection, type CollectionEntry } from 'astro:content'
 import BlogCard from '../components/BlogCard.astro'
 import BaseLayout from '../layouts/BaseLayout.astro'
 import sourceSans3Latin from '@fontsource/source-sans-3/files/source-sans-3-latin-400-normal.woff2?url'
 
+// A post is a draft if it sets `draft: true` or lives in the
+// `src/content/blog/drafts/` subfolder (slug then starts with `drafts/`).
+const isDraft = (post: CollectionEntry<'blog'>) =>
+	post.data.draft === true || post.slug.startsWith('drafts/')
+
 const posts = (
-	await getCollection('blog', ({ data }) => data.index !== false && !data.draft)
+	await getCollection('blog', (post) => post.data.index !== false && !isDraft(post))
 ).sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf())
 
 // Drafts get their own row, visible only while running `astro dev`. They are
 // never built into production, so this list is empty in a real build.
 const drafts = import.meta.env.DEV
-	? (await getCollection('blog', ({ data }) => data.draft === true)).sort(
+	? (await getCollection('blog', isDraft)).sort(
 			(a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf()
 		)
 	: []
@@ -21,7 +26,7 @@ const drafts = import.meta.env.DEV
 // while working locally.
 const unindexed = import.meta.env.DEV
 	? (
-			await getCollection('blog', ({ data }) => data.index === false && !data.draft)
+			await getCollection('blog', (post) => post.data.index === false && !isDraft(post))
 		).sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf())
 	: []
 ---

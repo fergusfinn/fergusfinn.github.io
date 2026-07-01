@@ -2,7 +2,6 @@
 title: 'Disaggregating prefill on DeepSeek-V4-Flash'
 description: 'Why disaggregated prefill helps a DP-attention deployment: prefill interference and the prefill-activation KV tax, and the per-GPU throughput payoff.'
 pubDate: 'Jul 1 2026'
-draft: true
 ---
 
 > **Draft plan (agreed — not body copy; delete before publish).** Disaggregated

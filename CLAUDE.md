@@ -8,6 +8,7 @@ This is a personal technical blog built with Astro.
 src/
   content/
     blog/           # Blog posts (.md or .mdx)
+      drafts/       # Work-in-progress posts (dev-only; see Drafts)
     config.ts       # Content schema
   assets/
     blogimages/     # Cover images, organized by slug
@@ -41,16 +42,35 @@ draft: true              # optional, default false (see Drafts below)
 
 ### Drafts
 
-Set `draft: true` in a post's frontmatter to mark it unpublished. Drafts are:
+A post is a draft if **either** is true:
+
+- it lives in `src/content/blog/drafts/`, **or**
+- its frontmatter sets `draft: true`.
+
+The folder is the primary path: drop a `.md`/`.mdx` into `drafts/` to start one,
+and **move it up to `src/content/blog/` to publish** — nothing to toggle. The
+`draft: true` flag still works if you'd rather mark a post a draft in place. Both
+are honoured by every filter: `index.astro`, `blog/[...slug]/index.astro`,
+`blog/[...slug]/md.ts`, and `rss.xml.js`.
+
+Drafts are:
 
 - **Excluded from production builds entirely** — no page, no `/md` endpoint, and
   no entry in the index, sitemap, or RSS feed. They never reach `dist/`.
-- **Visible only under `astro dev`** — they appear in a separate "Drafts" row on
-  the blog index and their pages are reachable by URL for previewing.
+- **Visible only under `astro dev`** — they get their own "Drafts" row on the
+  blog index and preview by URL. A folder draft previews at `/blog/drafts/<name>`;
+  the `/drafts/` segment disappears once you move it up to publish.
 
-The mechanism keys off `import.meta.env.DEV`, so a draft is simply invisible in
-any real build. This replaces deleting/stashing work-in-progress posts: keep
-them in `src/content/blog/` with `draft: true` and flip the flag to publish.
+Folder-draft caveats: **import components with the `@/` alias**
+(e.g. `@/components/specdec/Foo.tsx`), never a relative `../..` path — moving a
+post between `blog/` and `blog/drafts/` changes its depth and breaks relative
+imports (which 500s *every* post page, since the route renders all posts). Also:
+its cover image (if any) must sit at
+`src/assets/blogimages/drafts/<name>/cover.jpg` (or add it at publish time — a
+missing cover renders fine). Otherwise a folder draft behaves **identically** to
+a published post — same page render, `/md` export, and link rewriting (the page
+and `/md` route both live under `blog/[...slug]/`); only the URL differs
+(`/blog/drafts/<name>` vs `/blog/<name>`).
 
 ### Cover Images
 
